@@ -31,7 +31,7 @@ echo ""
 # ====================
 # 2. Clone/Update Repository
 # ====================
-echo "[1/3] Setting up application..."
+echo "[1/4] Setting up application..."
 git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
 
 if [ -d "$APP_DIR" ]; then
@@ -45,7 +45,7 @@ fi
 # ====================
 # 3. Setup Nginx
 # ====================
-echo "[2/3] Configuring Nginx..."
+echo "[2/4] Configuring Nginx..."
 sed "s/YOUR_DOMAIN/$DOMAIN/g" nginx.conf > /etc/nginx/sites-available/ptt-server
 ln -sf /etc/nginx/sites-available/ptt-server /etc/nginx/sites-enabled/
 nginx -t
@@ -54,14 +54,34 @@ systemctl reload nginx
 # ====================
 # 4. Start Application
 # ====================
-echo "[3/3] Starting application..."
+echo "[3/4] Starting application..."
 docker compose down --remove-orphans 2>/dev/null || true
 docker compose up -d --build
 
 # ====================
+# 5. Run Migrations
+# ====================
+echo "[4/4] Running migrations..."
+sleep 5
+
+# Wait for postgres to be ready
+until docker compose exec -T postgres pg_isready -U ${PG_USER:-admin} -d ${PG_DATABASE:-ptt_alertor} > /dev/null 2>&1; do
+    echo "Waiting for PostgreSQL..."
+    sleep 2
+done
+
+# Run all SQL files in migrations folder (sorted by name)
+for sql_file in migrations/*.sql; do
+    if [ -f "$sql_file" ]; then
+        echo "Running: $sql_file"
+        docker compose exec -T postgres psql -U ${PG_USER:-admin} -d ${PG_DATABASE:-ptt_alertor} -f "/docker-entrypoint-initdb.d/$(basename $sql_file)"
+    fi
+done
+echo "✅ Migrations completed"
+
+# ====================
 # Verify
 # ====================
-sleep 5
 
 if docker compose ps | grep -q "Up"; then
     echo ""

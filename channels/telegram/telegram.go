@@ -37,12 +37,14 @@ func init() {
 
 	webhookConfig, err := tgbotapi.NewWebhook(host + "/telegram/" + token)
 	if err != nil {
-		log.WithError(err).Fatal("Telegram Bot Create Webhook Failed")
+		log.WithError(err).Error("Telegram Bot Create Webhook Failed")
+		return
 	}
 	webhookConfig.MaxConnections = 100
 	_, err = bot.Request(webhookConfig)
 	if err != nil {
-		log.WithError(err).Fatal("Telegram Bot Set Webhook Failed")
+		log.WithError(err).Error("Telegram Bot Set Webhook Failed - will retry on next restart")
+		return
 	}
 	log.Info("Telegram Bot Sets Webhook Success")
 }
