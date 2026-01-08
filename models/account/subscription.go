@@ -132,16 +132,16 @@ func (p *SubscriptionPostgres) ListByUserID(userID int) ([]*Subscription, error)
 	return subs, nil
 }
 
-// Update updates a subscription
-func (p *SubscriptionPostgres) Update(id int, enabled bool) error {
+// Update updates a subscription with all fields
+func (p *SubscriptionPostgres) Update(id int, board, subType, value string, enabled bool) error {
 	ctx := context.Background()
 	pool := connections.Postgres()
 
 	_, err := pool.Exec(ctx, `
 		UPDATE subscriptions
-		SET enabled = $1
-		WHERE id = $2
-	`, enabled, id)
+		SET board = $1, sub_type = $2, value = $3, enabled = $4, updated_at = NOW()
+		WHERE id = $5
+	`, board, subType, value, enabled, id)
 
 	return err
 }

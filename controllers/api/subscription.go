@@ -23,7 +23,10 @@ type CreateSubscriptionRequest struct {
 
 // UpdateSubscriptionRequest represents a subscription update request
 type UpdateSubscriptionRequest struct {
-	Enabled bool `json:"enabled"`
+	Board   string `json:"board"`
+	SubType string `json:"sub_type"`
+	Value   string `json:"value"`
+	Enabled bool   `json:"enabled"`
 }
 
 // ListSubscriptions returns all subscriptions for the current user
@@ -188,15 +191,46 @@ func UpdateSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		return
 	}
 
-	if err := subscriptionRepo.Update(id, req.Enabled); err != nil {
+	// Validate board
+	if req.Board == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "看板為必填"})
+		return
+	}
+
+	// Check if board exists
+	if !rss.CheckBoardExist(req.Board) {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "看板不存在"})
+		return
+	}
+
+	// Validate sub_type
+	validSubTypes := map[string]bool{"keyword": true, "author": true, "pushsum": true}
+	if !validSubTypes[req.SubType] {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的訂閱類型，必須是 keyword、author 或 pushsum"})
+		return
+	}
+
+	// Validate value
+	if req.Value == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "訂閱值為必填"})
+		return
+	}
+
+	if err := subscriptionRepo.Update(id, req.Board, req.SubType, req.Value, req.Enabled); err != nil {
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "更新訂閱失敗"})
 		return
 	}
 
-	// Sync to Redis (update user data with new enabled status)
+	// Update sub for Redis sync
+	sub.Board = req.Board
+	sub.SubType = req.SubType
+	sub.Value = req.Value
+	sub.Enabled = req.Enabled
+
+	// Sync to Redis (update user data)
 	acc, _ := accountRepo.FindByID(claims.UserID)
 	if acc != nil {
-		go redisSync.SyncSubscriptionCreate(sub, acc) // Reuse create to rebuild user data
+		go redisSync.SyncSubscriptionCreate(sub, acc)
 	}
 
 	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "訂閱已更新"})
