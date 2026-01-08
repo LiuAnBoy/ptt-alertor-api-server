@@ -188,7 +188,10 @@ func checkNewArticle(bd *board.Board, boardCh chan *board.Board) {
 	}
 	if len(bd.NewArticles) != 0 {
 		bd.Articles = bd.OnlineArticles
-		log.WithField("board", bd.Name).Info("Updated Articles")
+		log.WithFields(log.Fields{
+			"board": bd.Name,
+			"count": len(bd.NewArticles),
+		}).Infof("Updated Articles%s", bd.NewArticles.String())
 		if err := bd.Save(); err == nil {
 			boardCh <- bd
 		}
