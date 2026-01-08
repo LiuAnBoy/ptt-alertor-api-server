@@ -15,12 +15,17 @@ echo "=========================================="
 echo ""
 
 # ====================
-# 1. Input Domain
+# 1. Input Settings
 # ====================
-read -p "請輸入你的 Domain (例如: ptt-server.example.com): " DOMAIN
+read -p "請輸入 API Domain (例如: ptt-server.example.com): " DOMAIN
+read -p "請輸入 Dashboard URL (例如: https://ptt.example.com): " DASHBOARD_URL
+read -p "請輸入 PostgreSQL 密碼: " PG_PASSWORD
+read -p "請輸入 JWT Secret: " JWT_SECRET
+read -p "請輸入 Telegram Bot Token: " TELEGRAM_TOKEN
+read -p "請輸入 Telegram Bot Username: " TELEGRAM_BOT_USERNAME
 
-if [ -z "$DOMAIN" ]; then
-    echo "❌ Domain 不能為空"
+if [ -z "$DOMAIN" ] || [ -z "$PG_PASSWORD" ] || [ -z "$JWT_SECRET" ] || [ -z "$TELEGRAM_TOKEN" ]; then
+    echo "❌ 所有欄位都必須填寫"
     exit 1
 fi
 
@@ -31,7 +36,7 @@ echo ""
 # ====================
 # 2. Clone/Update Repository
 # ====================
-echo "[1/5] Setting up application..."
+echo "[1/4] Setting up application..."
 if [ -d "$APP_DIR" ]; then
     cd "$APP_DIR"
     git pull origin master
@@ -43,32 +48,54 @@ fi
 # ====================
 # 3. Setup Environment
 # ====================
-echo "[2/5] Setting up environment..."
-if [ ! -f ".env" ]; then
-    cp .env.example .env
+echo "[2/4] Setting up environment..."
+cat > .env << EOF
+# ====================
+# Application
+# ====================
+APP_HOST=https://$DOMAIN
+APP_WS_HOST=wss://$DOMAIN
+BOARD_HIGH=Stock
 
-    # Auto update APP_HOST with domain
-    sed -i "s|APP_HOST=.*|APP_HOST=https://$DOMAIN|g" .env
+# ====================
+# PostgreSQL
+# ====================
+PG_HOST=postgres
+PG_PORT=5432
+PG_USER=admin
+PG_PASSWORD=$PG_PASSWORD
+PG_DATABASE=ptt_alertor
+PG_POOL_MAX=10
 
-    echo ""
-    echo "⚠️  請編輯 .env 設定檔："
-    echo "    nano $APP_DIR/.env"
-    echo ""
-    echo "必填設定："
-    echo "  - APP_HOST=https://$DOMAIN (已自動設定)"
-    echo "  - PG_PASSWORD=<安全的密碼>"
-    echo "  - JWT_SECRET=<安全的密鑰>"
-    echo "  - TELEGRAM_TOKEN=<你的 Bot Token>"
-    echo "  - TELEGRAM_BOT_USERNAME=<你的 Bot Username>"
-    echo "  - DASHBOARD_URL=<前端網址>"
-    echo ""
-    read -p "編輯完成後按 Enter 繼續..."
-fi
+# ====================
+# Redis
+# ====================
+REDIS_HOST=redis
+REDIS_PORT=6379
+
+# ====================
+# Telegram
+# ====================
+TELEGRAM_TOKEN=$TELEGRAM_TOKEN
+TELEGRAM_BOT_USERNAME=$TELEGRAM_BOT_USERNAME
+
+# ====================
+# JWT
+# ====================
+JWT_SECRET=$JWT_SECRET
+
+# ====================
+# Dashboard (Frontend URL, also used for CORS)
+# ====================
+DASHBOARD_URL=$DASHBOARD_URL
+EOF
+
+echo "✅ .env 已建立"
 
 # ====================
 # 4. Setup Nginx
 # ====================
-echo "[3/5] Configuring Nginx..."
+echo "[3/4] Configuring Nginx..."
 sed "s/YOUR_DOMAIN/$DOMAIN/g" nginx.conf > /etc/nginx/sites-available/ptt-server
 ln -sf /etc/nginx/sites-available/ptt-server /etc/nginx/sites-enabled/
 nginx -t
@@ -77,14 +104,13 @@ systemctl reload nginx
 # ====================
 # 5. Start Application
 # ====================
-echo "[4/5] Starting application..."
+echo "[4/4] Starting application..."
 docker compose down --remove-orphans 2>/dev/null || true
 docker compose up -d --build
 
 # ====================
-# 6. Verify
+# Verify
 # ====================
-echo "[5/5] Verifying deployment..."
 sleep 5
 
 if docker compose ps | grep -q "Up"; then
