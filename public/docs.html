@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+{{template "head" .}}
+
+<body>
+    <div class="container">
+        <div class="hidden-xs">
+            {{template "header"}}
+        </div>
+        <ul class="nav nav-tabs" role="tablist">
+            <li role="presentation" class="active">
+                <a href="#advanced-comparison" aria-controls="advanced-comparison" role="tab" data-toggle="tab">進階比對</a>
+            </li>
+            <li role="presentation">
+                <a href="#batch-edit" aria-controls="batch-edit" role="tab" data-toggle="tab">批量編輯</a>
+            </li>
+            <li role="presentation">
+                <a href="#commandline" aria-controls="commandline" role="tab" data-toggle="tab">指令列</a>
+            </li>
+        </ul>
+        <div class="tab-content">
+            <div role="tabpanel" class="tab-pane active" id="advanced-comparison">
+                <p></p>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">&: 同時出現</h3>
+                    </div>
+                    <div class="panel-body">
+                        <p class="lead">新增 drama-ticket 售&杰倫</p>
+                        <dl>
+                            <dt>標題同時出現售和杰倫的才會通知</dt>
+                            <dd>✓ [售票] 杰倫地表最強演唱會</dd>
+                            <dd>✗ [售票] 阿妹 烏托邦</dd>
+                        </dl>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">!: 除了B以外的所有文章</h3>
+                    </div>
+                    <div class="panel-body">
+                        <p class="lead"> 新增 gossiping !問卦 </p>
+                        <dl>
+                            <dt>除了問卦以外的文章全部通知</dt>
+                        </dl>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">&!: 出現A裡的文章排除B</h3>
+                    </div>
+                    <div class="panel-body">
+                        <p class="lead"> 新增 gossiping 柯文哲&!問卦 </p>
+                        <dl>
+                            <dt>標題出現柯文哲且不是問卦的才會通知</dt>
+                            <dd>✗ [問卦] 柯文哲...</dd>
+                            <dd>✓ [新聞] 柯文哲...</dd>
+                            <dd>✓ [爆卦] 柯文哲...</dd>
+                        </dl>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">regexp: 正規表示式</h3>
+                    </div>
+                    <div class="panel-body">
+                        <p class="lead"> 新增 hardwaresale regexp:\\[賣/(台中|台北)/.*\\]?(RAM|ram)+.* </p>
+                        <dl>
+                            <dt>看得懂的.. 就看得懂 Orz</dt>
+                        </dl>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">通知看板所有文章的三種方法</h3>
+                    </div>
+                    <div class="panel-body">
+                        <dl>
+                            <dd>新增 lifeismoney [</dd>
+                            <dd>新增 lifeismoney !嘂</dd>
+                            <dd>新增 lifeismoney regexp:.*</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+            <div role="tabpanel" class="tab-pane" id="batch-edit">
+                <p></p>
+                <div class="panel panel-default">
+                    <div class="panel-body">
+                        <h4>所有看板：**</h4>
+                        <h4>所有關鍵字或作者：*</h4>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">刪除特定板所有關鍵字：</h3>
+                    </div>
+                    <div class="panel-body">
+                        <dl>
+                            <dd>刪除 gossiping *</dd>
+                            <dd>刪除 gossiping,ezsoft *</dd>
+                        </dl>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">刪除特定關鍵字在所有設定的看板：</h3>
+                    </div>
+                    <div class="panel-body">
+                        <dl>
+                            <dd>刪除 ** 樂透</dd>
+                            <dd>刪除 ** 樂透,閒聊</dd>
+                        </dl>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">刪除全部關鍵字設定：</h3>
+                    </div>
+                    <div class="panel-body">
+                        <dl>
+                            <dd>刪除 ** *</dd>
+                        </dl>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">刪除作者亦同：</h3>
+                    </div>
+                    <div class="panel-body">
+                        <dl>
+                            <dd>刪除作者 gossiping *</dd>
+                            <dd>刪除作者 gossiping,ezsoft *</dd>
+                            <dd>刪除作者 ** chodino</dd>
+                            <dd>刪除作者 ** chodino,obov</dd>
+                            <dd>刪除作者 ** *</dd>
+                        </dl>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">取消所有看板推/噓文數通知：</h3>
+                    </div>
+                    <div class="panel-body">
+                        <dl>
+                            <dd>新增推文數 ** 0</dd>
+                            <dd>新增噓文數 ** 0</dd>
+                        </dl>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">在已經追蹤的所有看板加入關鍵字、作者、推文數</h3>
+                    </div>
+                    <div class="panel-body">
+                        <dl>
+                            <dt>所有看板不分追蹤類別</dt>
+                            <dd>新增 ** 尋人</dd>
+                            <dd>新增作者 ** chodino</dd>
+                            <dd>新增推文數 ** 100</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+            <div role="tabpanel" class="tab-pane" id="commandline">
+                <p></p>
+                <div class="panel panel-default">
+                    <div class="panel-body">
+                        <h4><code>&lt;add|del&gt; &lt;-flag &lt;argument&gt;&gt; &lt;board&gt; [board...]</code></h4>
+                        <code>add -k ptt -a chodino -p 10 -b 10 ezsoft gossiping</code>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">參數說明</h3>
+                    </div>
+                    <div class="panel-body">
+                        <dl>
+                            <dt>多個看板以半形逗號(,)或空白( )分隔皆可</dt>
+                            <dd>-k, --keyword: 關鍵字</dd>
+                            <dd>-a, --author: 作者</dd>
+                            <dd>-p, --push: 推文數</dd>
+                            <dd>-b, --boo: 噓文數</dd>
+                        </dl>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">範例</h3>
+                    </div>
+                    <div class="panel-body">
+                        <dl>
+                            <dt>新增關鍵字、作者、推噓文數</dt>
+                            <dd><code>add -k ptt -a chodino -p 10 -b 10 ezsoft gossiping</code></dd>
+                        </dl>
+                        <dl>
+                            <dt>結合進階比對</dt>
+                            <dd><code>add -k ptt&amp;alertor,idea -a chodino,ronnywang ezsoft</code></dd>
+                        </dl>
+                        <dl>
+                            <dt>使用長旗標值，等於符號可有可無</dt>
+                            <dd><code>del --keyword ptt --author chodino ezsoft gossiping</code></dd>
+                            <dd><code>del --keyword=ptt --author=chodino ezsoft gossiping</code></dd>
+                        </dl>
+                        <dl>
+                            <dt>結合批次編輯</dt>
+                            <dd><code>del -k * -a * **</code></dd>
+                            <dd><code>add -p 0 -b 0 **</code></dd>
+                        </dl>
+                    </div>
+                </div>
+                <div class="panel panel-default">
+                    <div class="panel-heading">
+                        <h3 class="panel-title">其它</h3>
+                    </div>
+                    <div class="panel-body">
+                        <dl>
+                            <dd>list：清單</dd>
+                            <dd>help: 指令</dd>
+                            <dd>ranking: 排名</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {{template "script"}}
+</body>
+
+</html>

@@ -1,0 +1,157 @@
+package subscription
+
+import (
+	"errors"
+	"sort"
+	"strings"
+
+	"github.com/Ptt-Alertor/ptt-alertor/models/board"
+)
+
+// Error definitions for subscription operations
+var (
+	ErrBoardNotSubscribed   = errors.New("找不到此看板的訂閱，請先輸入「清單」確認")
+	ErrKeywordNotFound      = errors.New("找不到此關鍵字，請先輸入「清單」確認")
+	ErrAuthorNotFound       = errors.New("找不到此作者，請先輸入「清單」確認")
+	ErrSubscriptionNotFound = errors.New("找不到此訂閱，請先輸入「清單」確認")
+)
+
+type Subscriptions []Subscription
+
+func (ss Subscriptions) String() string {
+
+	sort.Slice(ss, func(i, j int) bool {
+		return ss[i].Board < ss[j].Board
+	})
+
+	str := "關鍵字\n"
+	for _, sub := range ss {
+		if sub.String() != "" {
+			str += sub.String() + "\n"
+		}
+	}
+	str += "----\n作者\n"
+	for _, sub := range ss {
+		if sub.StringAuthor() != "" {
+			str += sub.StringAuthor() + "\n"
+		}
+	}
+	str += "----\n推文數\n"
+	for _, sub := range ss {
+		if sub.StringPushSum() != "" {
+			str += sub.StringPushSum() + "\n"
+		}
+	}
+	str += "----\n推文\n請輸入「推文清單」查看推文追蹤列表。"
+
+	return str
+}
+
+func (ss Subscriptions) StringCommentList() string {
+	var str string
+	for _, sub := range ss {
+		if sub.StringArticle() != "" {
+			str += sub.StringArticle() + "\n"
+		}
+	}
+	return str
+}
+
+func (ss *Subscriptions) Add(sub Subscription) error {
+	if ok, suggestion := board.CheckBoardExist(sub.Board); !ok {
+		return board.BoardNotExistError{Suggestion: suggestion}
+	}
+	sub.CleanUp()
+	for i, s := range *ss {
+		if strings.EqualFold(s.Board, sub.Board) {
+			s.Keywords.AppendNonRepeat(sub.Keywords, false)
+			s.Authors.AppendNonRepeat(sub.Authors, false)
+			s.Articles.AppendNonRepeat(sub.Articles, false)
+			(*ss)[i] = s
+			return nil
+		}
+	}
+	*ss = append(*ss, sub)
+
+	return nil
+}
+
+func (ss *Subscriptions) Remove(sub Subscription) error {
+	sub.CleanUp()
+	boardFound := false
+	for i := 0; i < len(*ss); i++ {
+		s := (*ss)[i]
+		if strings.EqualFold(s.Board, sub.Board) {
+			boardFound = true
+
+			// Check if keywords exist before deleting
+			if len(sub.Keywords) > 0 {
+				for _, kw := range sub.Keywords {
+					if kw != "*" && !s.Keywords.ContainsFold(kw) {
+						return ErrKeywordNotFound
+					}
+				}
+			}
+
+			// Check if authors exist before deleting
+			if len(sub.Authors) > 0 {
+				for _, author := range sub.Authors {
+					if author != "*" && !s.Authors.ContainsFold(author) {
+						return ErrAuthorNotFound
+					}
+				}
+			}
+
+			s.DeleteKeywords(sub.Keywords)
+			s.DeleteAuthors(sub.Authors)
+			s.DeleteArticles(sub.Articles)
+			(*ss)[i] = s
+			if isSubEmpty((*ss)[i]) {
+				*ss = append((*ss)[:i], (*ss)[i+1:]...)
+				i--
+			}
+			return nil
+		}
+	}
+
+	if !boardFound {
+		return ErrBoardNotSubscribed
+	}
+	return nil
+}
+
+func (ss *Subscriptions) Update(sub Subscription) error {
+	if ok, suggestion := board.CheckBoardExist(sub.Board); !ok {
+		return board.BoardNotExistError{Suggestion: suggestion}
+	}
+	for i := 0; i < len(*ss); i++ {
+		s := (*ss)[i]
+		if strings.EqualFold(s.Board, sub.Board) {
+			s.PushSum = sub.PushSum
+			(*ss)[i] = s
+			if isSubEmpty((*ss)[i]) {
+				*ss = append((*ss)[:i], (*ss)[i+1:]...)
+				i--
+			}
+			return nil
+		}
+	}
+	*ss = append(*ss, sub)
+	return nil
+}
+
+func (ss *Subscriptions) Delete(sub Subscription) error {
+	for i := 0; i < len(*ss); i++ {
+		s := (*ss)[i]
+		if strings.EqualFold(s.Board, sub.Board) {
+			*ss = append((*ss)[:i], (*ss)[i+1:]...)
+			i--
+			return nil
+		}
+	}
+	return nil
+}
+
+func isSubEmpty(sub Subscription) bool {
+	return len(sub.Keywords) == 0 && len(sub.Authors) == 0 && len(sub.Articles) == 0 && sub.PushSum == PushSum{}
+}
