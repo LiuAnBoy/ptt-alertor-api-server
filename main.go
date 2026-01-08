@@ -51,6 +51,12 @@ func main() {
 
 	router := newRouter()
 
+	// health check
+	router.GET("/hello", func(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"message":"Hello World!"}`))
+	})
+
 	router.GET("/", ctrlr.TelegramIndex)
 	router.GET("/telegram", ctrlr.TelegramIndex)
 	router.GET("/redirect/:checksum", ctrlr.Redirect)
