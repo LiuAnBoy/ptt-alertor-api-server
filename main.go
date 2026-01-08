@@ -108,6 +108,9 @@ func main() {
 	router.PUT("/api/subscriptions/:id", auth.JWTAuth(api.UpdateSubscription))
 	router.DELETE("/api/subscriptions/:id", auth.JWTAuth(api.DeleteSubscription))
 
+	// API v1 - Stats (public)
+	router.GET("/api/stats/subscriptions", api.ListSubscriptionStats)
+
 	// API v1 - Admin
 	router.GET("/api/admin/users", auth.RequireAdmin(api.AdminListUsers))
 	router.GET("/api/admin/users/:id", auth.RequireAdmin(api.AdminGetUser))

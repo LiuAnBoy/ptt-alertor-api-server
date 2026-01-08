@@ -86,7 +86,20 @@ CREATE TABLE IF NOT EXISTS notification_bindings (
 );
 
 -- ============================================
--- 7. Indexes
+-- 7. Subscription Stats table (for analytics)
+-- ============================================
+CREATE TABLE IF NOT EXISTS subscription_stats (
+    id          SERIAL PRIMARY KEY,
+    board       VARCHAR(50) NOT NULL,
+    sub_type    VARCHAR(20) NOT NULL CHECK (sub_type IN ('keyword', 'author', 'pushsum')),
+    value       VARCHAR(255) NOT NULL,
+    count       INTEGER DEFAULT 0,
+    updated_at  TIMESTAMP DEFAULT NOW(),
+    UNIQUE(board, sub_type, value)
+);
+
+-- ============================================
+-- 8. Indexes
 -- ============================================
 -- Articles indexes
 CREATE INDEX IF NOT EXISTS idx_articles_board ON articles(board_name);
@@ -108,6 +121,10 @@ CREATE INDEX IF NOT EXISTS idx_subscriptions_board_type ON subscriptions(board, 
 CREATE INDEX IF NOT EXISTS idx_notification_bindings_user_id ON notification_bindings(user_id);
 CREATE INDEX IF NOT EXISTS idx_notification_bindings_service ON notification_bindings(service);
 CREATE INDEX IF NOT EXISTS idx_notification_bindings_service_id ON notification_bindings(service, service_id);
+
+-- Subscription stats indexes
+CREATE INDEX IF NOT EXISTS idx_subscription_stats_type_count ON subscription_stats(sub_type, count DESC);
+CREATE INDEX IF NOT EXISTS idx_subscription_stats_board ON subscription_stats(board);
 
 -- ============================================
 -- 8. Triggers
@@ -149,4 +166,10 @@ CREATE TRIGGER subscriptions_updated_at
 DROP TRIGGER IF EXISTS notification_bindings_updated_at ON notification_bindings;
 CREATE TRIGGER notification_bindings_updated_at
     BEFORE UPDATE ON notification_bindings
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- Apply trigger to subscription_stats
+DROP TRIGGER IF EXISTS subscription_stats_updated_at ON subscription_stats;
+CREATE TRIGGER subscription_stats_updated_at
+    BEFORE UPDATE ON subscription_stats
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();

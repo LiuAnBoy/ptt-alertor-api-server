@@ -12,6 +12,7 @@ import (
 )
 
 var subscriptionRepo = &account.SubscriptionPostgres{}
+var subscriptionStatsRepo = &account.SubscriptionStatsPostgres{}
 var redisSync = &account.RedisSync{}
 
 // CreateSubscriptionRequest represents a subscription creation request
@@ -119,6 +120,9 @@ func CreateSubscription(w http.ResponseWriter, r *http.Request, _ httprouter.Par
 		go redisSync.SyncSubscriptionCreate(sub, acc)
 	}
 
+	// Update subscription stats
+	go syncSubscriptionStats(req.Board, req.SubType, req.Value, true)
+
 	writeJSON(w, http.StatusCreated, SuccessResponse{Success: true, Message: "訂閱已建立"})
 }
 
@@ -216,6 +220,9 @@ func UpdateSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		return
 	}
 
+	// Store old values for stats sync before update
+	oldBoard, oldSubType, oldValue := sub.Board, sub.SubType, sub.Value
+
 	if err := subscriptionRepo.Update(id, req.Board, req.SubType, req.Value, req.Enabled); err != nil {
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "更新訂閱失敗"})
 		return
@@ -232,6 +239,12 @@ func UpdateSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 	if acc != nil {
 		go redisSync.SyncSubscriptionCreate(sub, acc)
 	}
+
+	// Update subscription stats (decrement old, increment new)
+	go func() {
+		syncSubscriptionStats(oldBoard, oldSubType, oldValue, false)
+		syncSubscriptionStats(req.Board, req.SubType, req.Value, true)
+	}()
 
 	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "訂閱已更新"})
 }
@@ -279,5 +292,31 @@ func DeleteSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		go redisSync.SyncSubscriptionDelete(sub, acc)
 	}
 
+	// Update subscription stats (decrement)
+	go syncSubscriptionStats(sub.Board, sub.SubType, sub.Value, false)
+
 	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "訂閱已刪除"})
+}
+
+// syncSubscriptionStats syncs subscription stats (increment or decrement)
+func syncSubscriptionStats(board, subType, value string, increment bool) {
+	var values []string
+
+	// Parse values based on sub_type
+	if subType == "keyword" {
+		values = account.ParseKeywordValues(value)
+	} else {
+		// For author and pushsum, use value directly
+		values = []string{value}
+	}
+
+	if len(values) == 0 {
+		return
+	}
+
+	if increment {
+		subscriptionStatsRepo.IncrementBatch(board, subType, values)
+	} else {
+		subscriptionStatsRepo.DecrementBatch(board, subType, values)
+	}
 }
