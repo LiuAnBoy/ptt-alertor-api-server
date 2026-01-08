@@ -1,0 +1,59 @@
+services:
+  api_dev:
+    build: .
+    container_name: ptt_alertor_api_dev
+    ports:
+      - "9090:9090"
+      - "6060:6060"
+    env_file:
+      - .env
+    environment:
+      - PG_HOST=postgres_dev
+      - REDIS_HOST=redis_dev
+    depends_on:
+      postgres_dev:
+        condition: service_healthy
+      redis_dev:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres_dev:
+    image: postgres:15-alpine
+    container_name: ptt_alertor_postgres_dev
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${PG_USER:-admin}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-password}
+      POSTGRES_DB: ${PG_DATABASE:-ptt_alertor_dev}
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-admin} -d ${PG_DATABASE:-ptt_alertor_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis_dev:
+    image: redis:7-alpine
+    container_name: ptt_alertor_redis_dev
+    env_file:
+      - .env
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_dev_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_dev_data:
+  redis_dev_data:
