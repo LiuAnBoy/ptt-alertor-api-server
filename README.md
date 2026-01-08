@@ -132,6 +132,20 @@ air
 | PUT | `/api/subscriptions/:id` | 更新訂閱 |
 | DELETE | `/api/subscriptions/:id` | 刪除訂閱 |
 
+### 統計 API (公開)
+
+| Method | Endpoint | 說明 |
+|--------|----------|------|
+| GET | `/api/stats/subscriptions` | 取得訂閱統計 |
+
+#### 統計 API 參數
+
+| 參數 | 說明 | 預設值 |
+|------|------|--------|
+| `type` | 訂閱類型 (`keyword`, `author`, `pushsum`) | `keyword` |
+| `limit` | 回傳數量上限 | `100` |
+| `board` | 篩選看板 (選填) | - |
+
 #### 新增訂閱範例
 
 ```json
@@ -184,7 +198,15 @@ air
 ```bash
 psql -h localhost -U admin -d ptt_alertor -f migrations/001_users.sql
 psql -h localhost -U admin -d ptt_alertor -f migrations/002_subscriptions.sql
+psql -h localhost -U admin -d ptt_alertor -f migrations/add_subscription_stats.sql
 # ...
+```
+
+### Docker 環境執行遷移
+
+```bash
+source .env
+docker exec -i ptt-alertor-postgres psql -U $PG_USER -d $PG_DATABASE < migrations/add_subscription_stats.sql
 ```
 
 ## 部署
