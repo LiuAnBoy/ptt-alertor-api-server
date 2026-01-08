@@ -14,6 +14,7 @@ import (
 
 	"github.com/Ptt-Alertor/ptt-alertor/command"
 	"github.com/Ptt-Alertor/ptt-alertor/connections"
+	"github.com/Ptt-Alertor/ptt-alertor/models/account"
 	"github.com/Ptt-Alertor/ptt-alertor/models/binding"
 	"github.com/Ptt-Alertor/ptt-alertor/myutil"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -240,6 +241,9 @@ func handleBindCode(args string, chatID int64) string {
 		log.WithError(err).Error("Failed to confirm binding")
 		return "綁定失敗，請稍後再試"
 	}
+
+	// Sync existing subscriptions to Redis after binding
+	go (&account.RedisSync{}).SyncAllSubscriptions(b.UserID)
 
 	return "綁定成功！您現在可以在網頁上管理訂閱，通知將發送到此 Telegram。"
 }

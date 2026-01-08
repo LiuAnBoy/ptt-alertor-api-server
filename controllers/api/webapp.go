@@ -76,6 +76,9 @@ func TelegramWebAppConfirm(w http.ResponseWriter, r *http.Request, _ httprouter.
 		return
 	}
 
+	// Sync existing subscriptions to Redis after binding
+	go redisSync.SyncAllSubscriptions(claims.UserID)
+
 	// Send success message to Telegram
 	telegram.SendTextMessage(chatID, "綁定成功！您現在可以在網頁上管理訂閱，通知將發送到此 Telegram。")
 

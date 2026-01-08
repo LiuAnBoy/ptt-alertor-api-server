@@ -247,3 +247,42 @@ func parsePushSum(value string) subscription.PushSum {
 	}
 	return ps
 }
+
+// SyncAllSubscriptions syncs all subscriptions for a user to Redis
+// This should be called after Telegram binding to sync existing subscriptions
+func (rs *RedisSync) SyncAllSubscriptions(userID int) error {
+	acc, err := (&Postgres{}).FindByID(userID)
+	if err != nil {
+		log.WithError(err).Error("Failed to find account for Redis sync")
+		return err
+	}
+
+	subs, err := (&SubscriptionPostgres{}).ListByUserID(userID)
+	if err != nil {
+		log.WithError(err).Error("Failed to list subscriptions for Redis sync")
+		return err
+	}
+
+	if len(subs) == 0 {
+		return nil
+	}
+
+	// Sync each subscription to Redis
+	for _, sub := range subs {
+		if err := rs.SyncSubscriptionCreate(sub, acc); err != nil {
+			log.WithFields(log.Fields{
+				"user_id":  userID,
+				"sub_id":   sub.ID,
+				"board":    sub.Board,
+				"sub_type": sub.SubType,
+			}).WithError(err).Error("Failed to sync subscription to Redis")
+		}
+	}
+
+	log.WithFields(log.Fields{
+		"user_id": userID,
+		"count":   len(subs),
+	}).Info("Synced existing subscriptions to Redis after Telegram binding")
+
+	return nil
+}
