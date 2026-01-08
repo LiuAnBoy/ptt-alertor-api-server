@@ -71,8 +71,7 @@ air
 | `TELEGRAM_TOKEN` | Telegram Bot Token |
 | `TELEGRAM_BOT_USERNAME` | Telegram Bot Username |
 | `JWT_SECRET` | JWT 密鑰 |
-| `DASHBOARD_URL` | 前端 Dashboard URL |
-| `CORS_ALLOWED_ORIGINS` | 允許的 CORS 來源 (逗號分隔) |
+| `DASHBOARD_URL` | 前端 Dashboard URL (也用於 CORS) |
 
 ## API
 
