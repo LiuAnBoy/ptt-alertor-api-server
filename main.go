@@ -28,13 +28,26 @@ type myRouter struct {
 	httprouter.Router
 }
 
+// responseWriter wraps http.ResponseWriter to capture status code
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
 func (mr myRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+	mr.Router.ServeHTTP(rw, r)
 	log.WithFields(log.Fields{
 		"method": r.Method,
 		"IP":     r.RemoteAddr,
 		"URI":    r.URL.Path,
+		"status": rw.statusCode,
 	}).Info("visit")
-	mr.Router.ServeHTTP(w, r)
 }
 
 func newRouter() *myRouter {
