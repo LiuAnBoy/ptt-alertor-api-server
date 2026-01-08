@@ -28,20 +28,21 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
-// AuthResponse represents an auth response with token
-type AuthResponse struct {
-	Token   string           `json:"token"`
-	Account *account.Account `json:"account"`
+// TokenResponse represents a token response
+type TokenResponse struct {
+	Token string `json:"token"`
 }
 
-// MessageResponse represents a simple message response
-type MessageResponse struct {
-	Message string `json:"message"`
+// SuccessResponse represents a success response
+type SuccessResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
 }
 
 // ErrorResponse represents an error response
 type ErrorResponse struct {
-	Error string `json:"error"`
+	Success bool   `json:"success"`
+	Message string `json:"message"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
@@ -61,58 +62,48 @@ func isValidEmail(email string) bool {
 func Register(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	var req RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的請求內容"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的請求內容"})
 		return
 	}
 
 	// Validate email
 	if !isValidEmail(req.Email) {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的電子郵件格式"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的電子郵件格式"})
 		return
 	}
 
 	// Validate password
 	if len(req.Password) < 6 {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "密碼必須至少 6 個字元"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "密碼必須至少 6 個字元"})
 		return
 	}
 
 	// Hash password
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "密碼加密失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "密碼加密失敗"})
 		return
 	}
 
 	// Create account
-	acc, err := accountRepo.Create(req.Email, hash, "user")
+	_, err = accountRepo.Create(req.Email, hash, "user")
 	if err != nil {
 		if err == account.ErrEmailExists {
-			writeJSON(w, http.StatusConflict, ErrorResponse{Error: "電子郵件已存在"})
+			writeJSON(w, http.StatusConflict, ErrorResponse{Success: false, Message: "電子郵件已存在"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "建立帳號失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "建立帳號失敗"})
 		return
 	}
 
-	// Generate token
-	token, err := auth.GenerateToken(acc.ID, acc.Email, acc.Role)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "產生令牌失敗"})
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, AuthResponse{
-		Token:   token,
-		Account: acc,
-	})
+	writeJSON(w, http.StatusCreated, SuccessResponse{Success: true, Message: "註冊成功"})
 }
 
 // Login handles user login
 func Login(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的請求內容"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的請求內容"})
 		return
 	}
 
@@ -120,36 +111,33 @@ func Login(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	acc, err := accountRepo.FindByEmail(req.Email)
 	if err != nil {
 		if err == account.ErrAccountNotFound {
-			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "電子郵件或密碼錯誤"})
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "電子郵件或密碼錯誤"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "查詢帳號失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "查詢帳號失敗"})
 		return
 	}
 
 	// Check if account is enabled
 	if !acc.Enabled {
-		writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "帳號已停用"})
+		writeJSON(w, http.StatusForbidden, ErrorResponse{Success: false, Message: "帳號已停用"})
 		return
 	}
 
 	// Check password
 	if !auth.CheckPassword(req.Password, acc.Password) {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "電子郵件或密碼錯誤"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "電子郵件或密碼錯誤"})
 		return
 	}
 
 	// Generate token
 	token, err := auth.GenerateToken(acc.ID, acc.Email, acc.Role)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "產生令牌失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "產生令牌失敗"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, AuthResponse{
-		Token:   token,
-		Account: acc,
-	})
+	writeJSON(w, http.StatusOK, TokenResponse{Token: token})
 }
 
 // MeResponse represents the /me endpoint response
@@ -166,13 +154,13 @@ type MeResponse struct {
 func Me(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	claims := auth.GetUserFromContext(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "未授權"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
 		return
 	}
 
 	acc, err := accountRepo.FindByID(claims.UserID)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "找不到帳號"})
+		writeJSON(w, http.StatusNotFound, ErrorResponse{Success: false, Message: "找不到帳號"})
 		return
 	}
 
@@ -210,13 +198,13 @@ type GenerateBindCodeRequest struct {
 func GenerateBindCode(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	claims := auth.GetUserFromContext(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "未授權"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
 		return
 	}
 
 	var req GenerateBindCodeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的請求內容"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的請求內容"})
 		return
 	}
 
@@ -228,28 +216,28 @@ func GenerateBindCode(w http.ResponseWriter, r *http.Request, _ httprouter.Param
 
 	// Validate service type
 	if service != binding.ServiceTelegram && service != binding.ServiceLine && service != binding.ServiceDiscord {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的服務類型"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的服務類型"})
 		return
 	}
 
 	// Check if already bound
 	existingBinding, err := bindingRepo.FindByUserAndService(claims.UserID, service)
 	if err == nil && existingBinding.ServiceID != "" {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "此服務已綁定"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "此服務已綁定"})
 		return
 	}
 
 	// Generate bind code
 	code, err := binding.GenerateBindCode()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "產生綁定碼失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "產生綁定碼失敗"})
 		return
 	}
 
 	// Save bind code (expires in 10 minutes)
 	expiresAt := time.Now().Add(10 * time.Minute)
 	if err := bindingRepo.UpdateBindCode(claims.UserID, service, code, expiresAt); err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "儲存綁定碼失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "儲存綁定碼失敗"})
 		return
 	}
 
@@ -285,7 +273,7 @@ type BindingStatusRequest struct {
 func BindingStatus(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	claims := auth.GetUserFromContext(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "未授權"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
 		return
 	}
 
@@ -321,7 +309,7 @@ type UnbindRequest struct {
 func UnbindService(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	claims := auth.GetUserFromContext(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "未授權"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
 		return
 	}
 
@@ -332,27 +320,27 @@ func UnbindService(w http.ResponseWriter, r *http.Request, ps httprouter.Params)
 
 	if err := bindingRepo.Delete(claims.UserID, service); err != nil {
 		if err == binding.ErrBindingNotFound {
-			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "找不到綁定"})
+			writeJSON(w, http.StatusNotFound, ErrorResponse{Success: false, Message: "找不到綁定"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "解除綁定失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "解除綁定失敗"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, MessageResponse{Message: "已成功解除綁定"})
+	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "已解除綁定"})
 }
 
 // GetAllBindings returns all bindings for the current user
 func GetAllBindings(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	claims := auth.GetUserFromContext(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "未授權"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
 		return
 	}
 
 	bindings, err := bindingRepo.FindAllByUser(claims.UserID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "查詢綁定失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "查詢綁定失敗"})
 		return
 	}
 
@@ -368,28 +356,28 @@ type SetBindingEnabledRequest struct {
 func SetBindingEnabled(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	claims := auth.GetUserFromContext(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "未授權"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
 		return
 	}
 
 	service := ps.ByName("service")
 	if service == "" {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "缺少服務類型"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "缺少服務類型"})
 		return
 	}
 
 	var req SetBindingEnabledRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的請求內容"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的請求內容"})
 		return
 	}
 
 	if err := bindingRepo.SetEnabled(claims.UserID, service, req.Enabled); err != nil {
 		if err == binding.ErrBindingNotFound {
-			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "找不到綁定"})
+			writeJSON(w, http.StatusNotFound, ErrorResponse{Success: false, Message: "找不到綁定"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "更新綁定失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "更新綁定失敗"})
 		return
 	}
 
@@ -397,6 +385,6 @@ func SetBindingEnabled(w http.ResponseWriter, r *http.Request, ps httprouter.Par
 	if req.Enabled {
 		status = "啟用"
 	}
-	writeJSON(w, http.StatusOK, MessageResponse{Message: "已" + status + "綁定"})
+	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "已" + status + "綁定"})
 }
 

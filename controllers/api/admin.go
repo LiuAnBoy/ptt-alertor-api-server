@@ -20,7 +20,7 @@ type UpdateUserRequest struct {
 func AdminListUsers(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	accounts, err := accountRepo.List()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "取得用戶列表失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "取得用戶列表失敗"})
 		return
 	}
 
@@ -35,24 +35,24 @@ func AdminListUsers(w http.ResponseWriter, r *http.Request, _ httprouter.Params)
 func AdminGetUser(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	id, err := strconv.Atoi(ps.ByName("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的用戶 ID"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的用戶 ID"})
 		return
 	}
 
 	acc, err := accountRepo.FindByID(id)
 	if err != nil {
 		if err == account.ErrAccountNotFound {
-			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "找不到用戶"})
+			writeJSON(w, http.StatusNotFound, ErrorResponse{Success: false, Message: "找不到用戶"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "取得用戶失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "取得用戶失敗"})
 		return
 	}
 
 	// Get user's subscriptions
 	subs, err := subscriptionRepo.ListByUserID(id)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "取得訂閱失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "取得訂閱失敗"})
 		return
 	}
 
@@ -66,36 +66,36 @@ func AdminGetUser(w http.ResponseWriter, r *http.Request, ps httprouter.Params) 
 func AdminUpdateUser(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	id, err := strconv.Atoi(ps.ByName("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的用戶 ID"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的用戶 ID"})
 		return
 	}
 
 	var req UpdateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的請求內容"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的請求內容"})
 		return
 	}
 
 	// Validate role
 	validRoles := map[string]bool{"admin": true, "user": true}
 	if !validRoles[req.Role] {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的角色，必須是 admin 或 user"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的角色，必須是 admin 或 user"})
 		return
 	}
 
 	if err := accountRepo.Update(id, req.Role, req.Enabled); err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "更新用戶失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "更新用戶失敗"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, MessageResponse{Message: "用戶已更新"})
+	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "用戶已更新"})
 }
 
 // AdminDeleteUser deletes a user (admin only)
 func AdminDeleteUser(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	id, err := strconv.Atoi(ps.ByName("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的用戶 ID"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的用戶 ID"})
 		return
 	}
 
@@ -103,7 +103,7 @@ func AdminDeleteUser(w http.ResponseWriter, r *http.Request, ps httprouter.Param
 	acc, _ := accountRepo.FindByID(id)
 
 	if err := accountRepo.Delete(id); err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "刪除用戶失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "刪除用戶失敗"})
 		return
 	}
 
@@ -112,7 +112,7 @@ func AdminDeleteUser(w http.ResponseWriter, r *http.Request, ps httprouter.Param
 		go redisSync.SyncUserDelete(acc)
 	}
 
-	writeJSON(w, http.StatusOK, MessageResponse{Message: "用戶已刪除"})
+	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "用戶已刪除"})
 }
 
 // BroadcastRequest represents a broadcast request
@@ -125,26 +125,26 @@ type BroadcastRequest struct {
 func AdminBroadcast(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	var req BroadcastRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的請求內容"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的請求內容"})
 		return
 	}
 
 	if req.Content == "" {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "訊息內容不能為空"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "訊息內容不能為空"})
 		return
 	}
 
 	if len(req.Platforms) == 0 {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "請指定至少一個平台"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "請指定至少一個平台"})
 		return
 	}
 
 	bc := &jobs.Broadcaster{}
 	bc.Msg = req.Content
 	if err := bc.Send(req.Platforms); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: err.Error()})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, MessageResponse{Message: "廣播已發送"})
+	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "廣播已發送"})
 }

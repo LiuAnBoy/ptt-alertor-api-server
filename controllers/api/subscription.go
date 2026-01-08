@@ -30,13 +30,13 @@ type UpdateSubscriptionRequest struct {
 func ListSubscriptions(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	claims := auth.GetUserFromContext(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "未授權"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
 		return
 	}
 
 	subs, err := subscriptionRepo.ListByUserID(claims.UserID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "取得訂閱列表失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "取得訂閱列表失敗"})
 		return
 	}
 
@@ -51,38 +51,38 @@ func ListSubscriptions(w http.ResponseWriter, r *http.Request, _ httprouter.Para
 func CreateSubscription(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	claims := auth.GetUserFromContext(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "未授權"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
 		return
 	}
 
 	var req CreateSubscriptionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的請求內容"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的請求內容"})
 		return
 	}
 
 	// Validate board
 	if req.Board == "" {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "看板為必填"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "看板為必填"})
 		return
 	}
 
 	// Check if board exists
 	if !rss.CheckBoardExist(req.Board) {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "看板不存在"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "看板不存在"})
 		return
 	}
 
 	// Validate sub_type
 	validSubTypes := map[string]bool{"keyword": true, "author": true, "pushsum": true}
 	if !validSubTypes[req.SubType] {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的訂閱類型，必須是 keyword、author 或 pushsum"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的訂閱類型，必須是 keyword、author 或 pushsum"})
 		return
 	}
 
 	// Validate value
 	if req.Value == "" {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "訂閱值為必填"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "訂閱值為必填"})
 		return
 	}
 
@@ -90,11 +90,11 @@ func CreateSubscription(w http.ResponseWriter, r *http.Request, _ httprouter.Par
 	if claims.Role == "user" {
 		count, err := subscriptionRepo.CountByUserID(claims.UserID)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "檢查訂閱數量失敗"})
+			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "檢查訂閱數量失敗"})
 			return
 		}
 		if count >= account.MaxSubscriptionsForUser {
-			writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "已達訂閱上限，一般用戶最多 3 組訂閱"})
+			writeJSON(w, http.StatusForbidden, ErrorResponse{Success: false, Message: "已達訂閱上限，一般用戶最多 3 組訂閱"})
 			return
 		}
 	}
@@ -103,10 +103,10 @@ func CreateSubscription(w http.ResponseWriter, r *http.Request, _ httprouter.Par
 	sub, err := subscriptionRepo.Create(claims.UserID, req.Board, req.SubType, req.Value)
 	if err != nil {
 		if err == account.ErrSubscriptionExists {
-			writeJSON(w, http.StatusConflict, ErrorResponse{Error: "訂閱已存在"})
+			writeJSON(w, http.StatusConflict, ErrorResponse{Success: false, Message: "訂閱已存在"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "建立訂閱失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "建立訂閱失敗"})
 		return
 	}
 
@@ -116,36 +116,36 @@ func CreateSubscription(w http.ResponseWriter, r *http.Request, _ httprouter.Par
 		go redisSync.SyncSubscriptionCreate(sub, acc)
 	}
 
-	writeJSON(w, http.StatusCreated, sub)
+	writeJSON(w, http.StatusCreated, SuccessResponse{Success: true, Message: "訂閱已建立"})
 }
 
 // GetSubscription returns a single subscription
 func GetSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	claims := auth.GetUserFromContext(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "未授權"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
 		return
 	}
 
 	id, err := strconv.Atoi(ps.ByName("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的訂閱 ID"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的訂閱 ID"})
 		return
 	}
 
 	sub, err := subscriptionRepo.FindByID(id)
 	if err != nil {
 		if err == account.ErrSubscriptionNotFound {
-			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "找不到訂閱"})
+			writeJSON(w, http.StatusNotFound, ErrorResponse{Success: false, Message: "找不到訂閱"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "取得訂閱失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "取得訂閱失敗"})
 		return
 	}
 
 	// Check ownership
 	if sub.UserID != claims.UserID && claims.Role != "admin" {
-		writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "禁止存取"})
+		writeJSON(w, http.StatusForbidden, ErrorResponse{Success: false, Message: "禁止存取"})
 		return
 	}
 
@@ -156,13 +156,13 @@ func GetSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Param
 func UpdateSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	claims := auth.GetUserFromContext(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "未授權"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
 		return
 	}
 
 	id, err := strconv.Atoi(ps.ByName("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的訂閱 ID"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的訂閱 ID"})
 		return
 	}
 
@@ -170,26 +170,26 @@ func UpdateSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 	sub, err := subscriptionRepo.FindByID(id)
 	if err != nil {
 		if err == account.ErrSubscriptionNotFound {
-			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "找不到訂閱"})
+			writeJSON(w, http.StatusNotFound, ErrorResponse{Success: false, Message: "找不到訂閱"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "取得訂閱失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "取得訂閱失敗"})
 		return
 	}
 
 	if sub.UserID != claims.UserID && claims.Role != "admin" {
-		writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "禁止存取"})
+		writeJSON(w, http.StatusForbidden, ErrorResponse{Success: false, Message: "禁止存取"})
 		return
 	}
 
 	var req UpdateSubscriptionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的請求內容"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的請求內容"})
 		return
 	}
 
 	if err := subscriptionRepo.Update(id, req.Enabled); err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "更新訂閱失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "更新訂閱失敗"})
 		return
 	}
 
@@ -199,20 +199,20 @@ func UpdateSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		go redisSync.SyncSubscriptionCreate(sub, acc) // Reuse create to rebuild user data
 	}
 
-	writeJSON(w, http.StatusOK, MessageResponse{Message: "訂閱已更新"})
+	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "訂閱已更新"})
 }
 
 // DeleteSubscription deletes a subscription
 func DeleteSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	claims := auth.GetUserFromContext(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "未授權"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
 		return
 	}
 
 	id, err := strconv.Atoi(ps.ByName("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的訂閱 ID"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的訂閱 ID"})
 		return
 	}
 
@@ -220,15 +220,15 @@ func DeleteSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 	sub, err := subscriptionRepo.FindByID(id)
 	if err != nil {
 		if err == account.ErrSubscriptionNotFound {
-			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "找不到訂閱"})
+			writeJSON(w, http.StatusNotFound, ErrorResponse{Success: false, Message: "找不到訂閱"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "取得訂閱失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "取得訂閱失敗"})
 		return
 	}
 
 	if sub.UserID != claims.UserID && claims.Role != "admin" {
-		writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "禁止存取"})
+		writeJSON(w, http.StatusForbidden, ErrorResponse{Success: false, Message: "禁止存取"})
 		return
 	}
 
@@ -236,7 +236,7 @@ func DeleteSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 	acc, _ := accountRepo.FindByID(claims.UserID)
 
 	if err := subscriptionRepo.Delete(id); err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "刪除訂閱失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "刪除訂閱失敗"})
 		return
 	}
 
@@ -245,5 +245,5 @@ func DeleteSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		go redisSync.SyncSubscriptionDelete(sub, acc)
 	}
 
-	writeJSON(w, http.StatusOK, MessageResponse{Message: "訂閱已刪除"})
+	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "訂閱已刪除"})
 }

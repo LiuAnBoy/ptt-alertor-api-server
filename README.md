@@ -75,6 +75,29 @@ air
 
 ## API
 
+詳細 API 文件請參考 [docs/API.md](docs/API.md)
+
+### 回應格式
+
+**成功回應 (非 GET)**
+```json
+{
+  "success": true,
+  "message": "操作成功訊息"
+}
+```
+
+**GET 回應**
+直接回傳資料 (JSON 物件或陣列)
+
+**錯誤回應**
+```json
+{
+  "success": false,
+  "message": "錯誤訊息"
+}
+```
+
 ### 認證 API
 
 | Method | Endpoint | 說明 |

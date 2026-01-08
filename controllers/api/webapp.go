@@ -25,18 +25,18 @@ func TelegramWebAppConfirm(w http.ResponseWriter, r *http.Request, _ httprouter.
 	// Get user from JWT
 	claims := auth.GetUserFromContext(r.Context())
 	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "未授權"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
 		return
 	}
 
 	var req TelegramWebAppRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效的請求內容"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的請求內容"})
 		return
 	}
 
 	if req.Token == "" {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "缺少 token"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "缺少 token"})
 		return
 	}
 
@@ -44,11 +44,11 @@ func TelegramWebAppConfirm(w http.ResponseWriter, r *http.Request, _ httprouter.
 	chatID, err := telegram.GetWebAppBindChatID(req.Token)
 	if err != nil {
 		if err == redis.ErrNil {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "無效或已過期的 token"})
+			writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效或已過期的 token"})
 			return
 		}
 		log.WithError(err).Error("Failed to get chat_id from Redis")
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "查詢失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "查詢失敗"})
 		return
 	}
 
@@ -57,14 +57,14 @@ func TelegramWebAppConfirm(w http.ResponseWriter, r *http.Request, _ httprouter.
 	// Check if user already has telegram binding
 	existingBinding, err := bindingRepo.FindByUserAndService(claims.UserID, binding.ServiceTelegram)
 	if err == nil && existingBinding.ServiceID != "" {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "此帳號已綁定 Telegram"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "此帳號已綁定 Telegram"})
 		return
 	}
 
 	// Check if this chat_id is already bound to another user
 	existingByServiceID, err := bindingRepo.FindByServiceID(binding.ServiceTelegram, chatIDStr)
 	if err == nil && existingByServiceID != nil && existingByServiceID.UserID != claims.UserID {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "此 Telegram 已綁定其他帳號"})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "此 Telegram 已綁定其他帳號"})
 		return
 	}
 
@@ -72,16 +72,12 @@ func TelegramWebAppConfirm(w http.ResponseWriter, r *http.Request, _ httprouter.
 	err = bindingRepo.ConfirmBinding(claims.UserID, binding.ServiceTelegram, chatIDStr)
 	if err != nil {
 		log.WithError(err).Error("Failed to confirm binding")
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "綁定失敗"})
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "綁定失敗"})
 		return
 	}
 
 	// Send success message to Telegram
 	telegram.SendTextMessage(chatID, "綁定成功！您現在可以在網頁上管理訂閱，通知將發送到此 Telegram。")
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"message":    "綁定成功",
-		"service":    binding.ServiceTelegram,
-		"service_id": chatIDStr,
-	})
+	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "綁定成功"})
 }
