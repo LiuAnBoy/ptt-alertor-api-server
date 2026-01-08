@@ -68,7 +68,7 @@ fi
 # 4. Setup Nginx
 # ====================
 echo "[4/6] Configuring Nginx..."
-cp deploy/nginx.conf /etc/nginx/sites-available/ptt-server
+cp nginx.conf /etc/nginx/sites-available/ptt-server
 ln -sf /etc/nginx/sites-available/ptt-server /etc/nginx/sites-enabled/
 
 # Remove default site if exists
