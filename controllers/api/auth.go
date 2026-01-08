@@ -168,8 +168,6 @@ func Me(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	bindings, _ := bindingRepo.FindAllByUser(acc.ID)
 	bindingStatus := map[string]bool{
 		binding.ServiceTelegram: false,
-		binding.ServiceLine:     false,
-		binding.ServiceDiscord:  false,
 	}
 	for _, b := range bindings {
 		if b.ServiceID != "" && b.Enabled {
