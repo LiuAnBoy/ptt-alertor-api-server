@@ -30,6 +30,9 @@ type Article struct {
 	LastPushDateTime time.Time `json:"lastPushDateTime,omitempty"`
 	Board            string    `json:"board,omitempty"`
 	PushSum          int       `json:"pushSum,omitempty"`
+	PositiveCount    int       `json:"positiveCount,omitempty"`
+	NegativeCount    int       `json:"negativeCount,omitempty"`
+	NeutralCount     int       `json:"neutralCount,omitempty"`
 	drive            Driver
 }
 

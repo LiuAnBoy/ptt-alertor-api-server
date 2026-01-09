@@ -19,7 +19,8 @@ func (Postgres) GetArticles(boardName string) (articles article.Articles) {
 	pool := connections.Postgres()
 
 	rows, err := pool.Query(ctx, `
-		SELECT code, id, title, link, date, author, push_sum, last_push_datetime
+		SELECT code, id, title, link, date, author, push_sum, last_push_datetime,
+		       positive_count, negative_count, neutral_count
 		FROM articles
 		WHERE board_name = $1
 		ORDER BY id DESC
@@ -40,6 +41,7 @@ func (Postgres) GetArticles(boardName string) (articles article.Articles) {
 		err := rows.Scan(
 			&a.Code, &a.ID, &a.Title, &a.Link,
 			&a.Date, &a.Author, &a.PushSum, &lastPushDT,
+			&a.PositiveCount, &a.NegativeCount, &a.NeutralCount,
 		)
 		if err != nil {
 			log.WithError(err).Error("PostgreSQL Scan Article Failed")

@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS articles (
     board_name         VARCHAR(50) NOT NULL REFERENCES boards(name) ON DELETE CASCADE,
     push_sum           INTEGER DEFAULT 0,
     last_push_datetime TIMESTAMP,
+    positive_count     INTEGER DEFAULT 0,
+    negative_count     INTEGER DEFAULT 0,
+    neutral_count      INTEGER DEFAULT 0,
     created_at         TIMESTAMP DEFAULT NOW(),
     updated_at         TIMESTAMP DEFAULT NOW()
 );
