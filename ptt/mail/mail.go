@@ -244,15 +244,16 @@ func (c *PTTClient) login(ctx context.Context) error {
 			return nil
 		}
 
-		// "登入中，請稍候" - Just wait, don't send anything
-		if strings.Contains(screenStr, "登入中") || strings.Contains(screenStr, "請稍候") {
-			log.Info("Login in progress, waiting...")
-			continue
-		}
-
-		// "密碼正確" - Login successful, wait for next screen
-		if strings.Contains(screenStr, "密碼正確") {
-			log.Info("Password correct, waiting for next screen...")
+		// Press space to continue - CHECK THIS FIRST (before "登入中")
+		// Because screen might contain both "登入中" and "按任意鍵"
+		if strings.Contains(screenStr, "請按任意鍵繼續") ||
+			strings.Contains(screenStr, "按任意鍵") ||
+			strings.Contains(screenStr, "您要刪除以上錯誤嘗試") ||
+			strings.Contains(screenStr, "錯誤嘗試") {
+			log.Info("Pressing space to continue")
+			if err := c.sendString(" "); err != nil {
+				log.WithError(err).Warn("Failed to send space")
+			}
 			continue
 		}
 
@@ -265,15 +266,15 @@ func (c *PTTClient) login(ctx context.Context) error {
 			continue
 		}
 
-		// Press space to continue through various prompts
-		if strings.Contains(screenStr, "請按任意鍵繼續") ||
-			strings.Contains(screenStr, "按任意鍵") ||
-			strings.Contains(screenStr, "您要刪除以上錯誤嘗試") ||
-			strings.Contains(screenStr, "錯誤嘗試") {
-			log.Info("Pressing space to continue")
-			if err := c.sendString(" "); err != nil {
-				log.WithError(err).Warn("Failed to send space")
-			}
+		// "密碼正確" without "按任意鍵" - wait for next screen
+		if strings.Contains(screenStr, "密碼正確") {
+			log.Info("Password correct, waiting for next screen...")
+			continue
+		}
+
+		// "登入中，請稍候" without "按任意鍵" - just wait
+		if strings.Contains(screenStr, "登入中") || strings.Contains(screenStr, "請稍候") {
+			log.Info("Login in progress, waiting...")
 			continue
 		}
 
