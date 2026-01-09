@@ -17,16 +17,23 @@ var (
 // MaxSubscriptionsForUser is the maximum number of subscriptions for regular users
 const MaxSubscriptionsForUser = 3
 
+// MailTemplate represents the mail template for a subscription
+type MailTemplate struct {
+	Subject string `json:"subject,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
 // Subscription represents a user subscription
 type Subscription struct {
-	ID        int       `json:"id"`
-	UserID    int       `json:"user_id"`
-	Board     string    `json:"board"`
-	SubType   string    `json:"sub_type"`
-	Value     string    `json:"value"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        int           `json:"id"`
+	UserID    int           `json:"user_id"`
+	Board     string        `json:"board"`
+	SubType   string        `json:"sub_type"`
+	Value     string        `json:"value"`
+	Enabled   bool          `json:"enabled"`
+	Mail      *MailTemplate `json:"mail,omitempty"`
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
 }
 
 // SubscriptionPostgres is the PostgreSQL repository for subscriptions
@@ -38,10 +45,11 @@ func (p *SubscriptionPostgres) Create(userID int, board, subType, value string) 
 	pool := connections.Postgres()
 
 	var sub Subscription
+	var mailSubject, mailContent *string
 	err := pool.QueryRow(ctx, `
 		INSERT INTO subscriptions (user_id, board, sub_type, value)
 		VALUES ($1, $2, $3, $4)
-		RETURNING id, user_id, board, sub_type, value, enabled, created_at, updated_at
+		RETURNING id, user_id, board, sub_type, value, enabled, mail_subject, mail_content, created_at, updated_at
 	`, userID, board, subType, value).Scan(
 		&sub.ID,
 		&sub.UserID,
@@ -49,6 +57,8 @@ func (p *SubscriptionPostgres) Create(userID int, board, subType, value string) 
 		&sub.SubType,
 		&sub.Value,
 		&sub.Enabled,
+		&mailSubject,
+		&mailContent,
 		&sub.CreatedAt,
 		&sub.UpdatedAt,
 	)
@@ -60,6 +70,17 @@ func (p *SubscriptionPostgres) Create(userID int, board, subType, value string) 
 		return nil, err
 	}
 
+	// Set mail template if exists
+	if mailSubject != nil || mailContent != nil {
+		sub.Mail = &MailTemplate{}
+		if mailSubject != nil {
+			sub.Mail.Subject = *mailSubject
+		}
+		if mailContent != nil {
+			sub.Mail.Content = *mailContent
+		}
+	}
+
 	return &sub, nil
 }
 
@@ -69,8 +90,9 @@ func (p *SubscriptionPostgres) FindByID(id int) (*Subscription, error) {
 	pool := connections.Postgres()
 
 	var sub Subscription
+	var mailSubject, mailContent *string
 	err := pool.QueryRow(ctx, `
-		SELECT id, user_id, board, sub_type, value, enabled, created_at, updated_at
+		SELECT id, user_id, board, sub_type, value, enabled, mail_subject, mail_content, created_at, updated_at
 		FROM subscriptions
 		WHERE id = $1
 	`, id).Scan(
@@ -80,6 +102,8 @@ func (p *SubscriptionPostgres) FindByID(id int) (*Subscription, error) {
 		&sub.SubType,
 		&sub.Value,
 		&sub.Enabled,
+		&mailSubject,
+		&mailContent,
 		&sub.CreatedAt,
 		&sub.UpdatedAt,
 	)
@@ -91,6 +115,17 @@ func (p *SubscriptionPostgres) FindByID(id int) (*Subscription, error) {
 		return nil, err
 	}
 
+	// Set mail template if exists
+	if mailSubject != nil || mailContent != nil {
+		sub.Mail = &MailTemplate{}
+		if mailSubject != nil {
+			sub.Mail.Subject = *mailSubject
+		}
+		if mailContent != nil {
+			sub.Mail.Content = *mailContent
+		}
+	}
+
 	return &sub, nil
 }
 
@@ -100,7 +135,7 @@ func (p *SubscriptionPostgres) ListByUserID(userID int) ([]*Subscription, error)
 	pool := connections.Postgres()
 
 	rows, err := pool.Query(ctx, `
-		SELECT id, user_id, board, sub_type, value, enabled, created_at, updated_at
+		SELECT id, user_id, board, sub_type, value, enabled, mail_subject, mail_content, created_at, updated_at
 		FROM subscriptions
 		WHERE user_id = $1
 		ORDER BY board, sub_type, value
@@ -113,6 +148,7 @@ func (p *SubscriptionPostgres) ListByUserID(userID int) ([]*Subscription, error)
 	var subs []*Subscription
 	for rows.Next() {
 		var sub Subscription
+		var mailSubject, mailContent *string
 		err := rows.Scan(
 			&sub.ID,
 			&sub.UserID,
@@ -120,11 +156,23 @@ func (p *SubscriptionPostgres) ListByUserID(userID int) ([]*Subscription, error)
 			&sub.SubType,
 			&sub.Value,
 			&sub.Enabled,
+			&mailSubject,
+			&mailContent,
 			&sub.CreatedAt,
 			&sub.UpdatedAt,
 		)
 		if err != nil {
 			return nil, err
+		}
+		// Set mail template if exists
+		if mailSubject != nil || mailContent != nil {
+			sub.Mail = &MailTemplate{}
+			if mailSubject != nil {
+				sub.Mail.Subject = *mailSubject
+			}
+			if mailContent != nil {
+				sub.Mail.Content = *mailContent
+			}
 		}
 		subs = append(subs, &sub)
 	}
@@ -142,6 +190,20 @@ func (p *SubscriptionPostgres) Update(id int, board, subType, value string, enab
 		SET board = $1, sub_type = $2, value = $3, enabled = $4, updated_at = NOW()
 		WHERE id = $5
 	`, board, subType, value, enabled, id)
+
+	return err
+}
+
+// UpdateWithMail updates a subscription with all fields including mail template
+func (p *SubscriptionPostgres) UpdateWithMail(id int, board, subType, value string, enabled bool, mailSubject, mailContent *string) error {
+	ctx := context.Background()
+	pool := connections.Postgres()
+
+	_, err := pool.Exec(ctx, `
+		UPDATE subscriptions
+		SET board = $1, sub_type = $2, value = $3, enabled = $4, mail_subject = $5, mail_content = $6, updated_at = NOW()
+		WHERE id = $7
+	`, board, subType, value, enabled, mailSubject, mailContent, id)
 
 	return err
 }

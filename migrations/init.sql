@@ -78,14 +78,16 @@ CREATE TABLE IF NOT EXISTS users (
 -- 6. Subscriptions table
 -- ============================================
 CREATE TABLE IF NOT EXISTS subscriptions (
-    id          SERIAL PRIMARY KEY,
-    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    board       VARCHAR(50) NOT NULL,
-    sub_type    VARCHAR(20) NOT NULL CHECK (sub_type IN ('keyword', 'author', 'pushsum')),
-    value       VARCHAR(255) NOT NULL,
-    enabled     BOOLEAN DEFAULT TRUE,
-    created_at  TIMESTAMP DEFAULT NOW(),
-    updated_at  TIMESTAMP DEFAULT NOW(),
+    id            SERIAL PRIMARY KEY,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    board         VARCHAR(50) NOT NULL,
+    sub_type      VARCHAR(20) NOT NULL CHECK (sub_type IN ('keyword', 'author', 'pushsum')),
+    value         VARCHAR(255) NOT NULL,
+    enabled       BOOLEAN DEFAULT TRUE,
+    mail_subject  VARCHAR(100),
+    mail_content  TEXT,
+    created_at    TIMESTAMP DEFAULT NOW(),
+    updated_at    TIMESTAMP DEFAULT NOW(),
     UNIQUE(user_id, board, sub_type, value)
 );
 
@@ -107,7 +109,19 @@ CREATE TABLE IF NOT EXISTS notification_bindings (
 );
 
 -- ============================================
--- 8. Subscription Stats table (for analytics)
+-- 8. PTT Accounts table (for PTT mail feature)
+-- ============================================
+CREATE TABLE IF NOT EXISTS ptt_accounts (
+    id                      SERIAL PRIMARY KEY,
+    user_id                 INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    ptt_username            VARCHAR(50) NOT NULL,
+    ptt_password_encrypted  TEXT NOT NULL,
+    created_at              TIMESTAMP DEFAULT NOW(),
+    updated_at              TIMESTAMP DEFAULT NOW()
+);
+
+-- ============================================
+-- 9. Subscription Stats table (for analytics)
 -- ============================================
 CREATE TABLE IF NOT EXISTS subscription_stats (
     id          SERIAL PRIMARY KEY,
@@ -120,7 +134,7 @@ CREATE TABLE IF NOT EXISTS subscription_stats (
 );
 
 -- ============================================
--- 9. Indexes
+-- 10. Indexes
 -- ============================================
 -- Articles indexes
 CREATE INDEX IF NOT EXISTS idx_articles_board ON articles(board_name);
@@ -147,8 +161,11 @@ CREATE INDEX IF NOT EXISTS idx_notification_bindings_service_id ON notification_
 CREATE INDEX IF NOT EXISTS idx_subscription_stats_type_count ON subscription_stats(sub_type, count DESC);
 CREATE INDEX IF NOT EXISTS idx_subscription_stats_board ON subscription_stats(board);
 
+-- PTT accounts indexes
+CREATE INDEX IF NOT EXISTS idx_ptt_accounts_user_id ON ptt_accounts(user_id);
+
 -- ============================================
--- 10. Triggers
+-- 11. Triggers
 -- ============================================
 -- Updated_at trigger function
 CREATE OR REPLACE FUNCTION update_updated_at()
@@ -199,4 +216,10 @@ CREATE TRIGGER notification_bindings_updated_at
 DROP TRIGGER IF EXISTS subscription_stats_updated_at ON subscription_stats;
 CREATE TRIGGER subscription_stats_updated_at
     BEFORE UPDATE ON subscription_stats
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- Apply trigger to ptt_accounts
+DROP TRIGGER IF EXISTS ptt_accounts_updated_at ON ptt_accounts;
+CREATE TRIGGER ptt_accounts_updated_at
+    BEFORE UPDATE ON ptt_accounts
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();

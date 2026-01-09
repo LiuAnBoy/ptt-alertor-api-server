@@ -17,6 +17,7 @@ import (
 	"github.com/Ptt-Alertor/ptt-alertor/models/account"
 	"github.com/Ptt-Alertor/ptt-alertor/models/binding"
 	"github.com/Ptt-Alertor/ptt-alertor/myutil"
+	"github.com/Ptt-Alertor/ptt-alertor/ptt/mail"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/julienschmidt/httprouter"
 )
@@ -80,13 +81,18 @@ func HandleRequest(w http.ResponseWriter, r *http.Request, _ httprouter.Params) 
 func handleCallbackQuery(update tgbotapi.Update) {
 	var responseText string
 	userID := strconv.FormatInt(update.CallbackQuery.From.ID, 10)
-	switch update.CallbackQuery.Data {
-	case "CANCEL":
+	chatID := update.CallbackQuery.Message.Chat.ID
+	data := update.CallbackQuery.Data
+	
+	switch {
+	case data == "CANCEL":
 		responseText = "取消"
+	case strings.HasPrefix(data, "mail:"):
+		responseText = handleMailCallback(data, chatID)
 	default:
-		responseText = command.HandleCommand(update.CallbackQuery.Data, userID, true)
+		responseText = command.HandleCommand(data, userID, true)
 	}
-	SendTextMessage(update.CallbackQuery.Message.Chat.ID, responseText)
+	SendTextMessage(chatID, responseText)
 }
 
 // help - 所有指令清單
@@ -291,6 +297,152 @@ func sendTextMessage(chatID int64, text string) {
 	if err != nil {
 		log.WithError(err).Error("Telegram Send Message Failed")
 	}
+}
+
+
+// MailButtonData contains data for mail button callback
+type MailButtonData struct {
+	UserID         int    `json:"u"` // User ID in PostgreSQL
+	SubscriptionID int    `json:"s"` // Subscription ID
+	ArticleAuthor  string `json:"a"` // PTT article author
+	ArticleIndex   int    `json:"i"` // 1-based index for display
+}
+
+// SendMessageWithMailButton sends message with mail buttons for multiple articles
+func SendMessageWithMailButton(chatID int64, text string, mailDataList []*MailButtonData) {
+	for _, msg := range myutil.SplitTextByLineBreak(text, maxCharacters) {
+		if len(mailDataList) > 0 {
+			sendTextMessageWithMailButton(chatID, msg, mailDataList)
+		} else {
+			sendTextMessage(chatID, msg)
+		}
+	}
+}
+
+func sendTextMessageWithMailButton(chatID int64, text string, mailDataList []*MailButtonData) {
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.DisableWebPagePreview = true
+
+	// Create buttons for each article (max 8 to avoid too many buttons)
+	var buttons []tgbotapi.InlineKeyboardButton
+	maxButtons := 8
+	if len(mailDataList) < maxButtons {
+		maxButtons = len(mailDataList)
+	}
+
+	for i := 0; i < maxButtons; i++ {
+		mailData := mailDataList[i]
+		// Create callback data: mail:<userID>:<subID>:<author>
+		callbackData := "mail:" + strconv.Itoa(mailData.UserID) + ":" +
+			strconv.Itoa(mailData.SubscriptionID) + ":" + mailData.ArticleAuthor
+
+		// Check if callback data is within Telegram's limit (64 bytes)
+		if len(callbackData) <= 64 {
+			// Button text: 📧 作者名(index)
+			buttonText := "📧 " + mailData.ArticleAuthor
+			if len(mailDataList) > 1 {
+				buttonText += "(" + strconv.Itoa(mailData.ArticleIndex) + ")"
+			}
+			buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData(buttonText, callbackData))
+		}
+	}
+
+	if len(buttons) > 0 {
+		// Create rows with 2 buttons each
+		var rows [][]tgbotapi.InlineKeyboardButton
+		for i := 0; i < len(buttons); i += 2 {
+			if i+1 < len(buttons) {
+				rows = append(rows, tgbotapi.NewInlineKeyboardRow(buttons[i], buttons[i+1]))
+			} else {
+				rows = append(rows, tgbotapi.NewInlineKeyboardRow(buttons[i]))
+			}
+		}
+		msg.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{InlineKeyboard: rows}
+	}
+
+	_, err := bot.Send(msg)
+	if err != nil {
+		log.WithError(err).Error("Telegram Send Message With Mail Button Failed")
+	}
+}
+
+// handleMailCallback handles the mail button callback
+func handleMailCallback(callbackData string, chatID int64) string {
+	// Parse callback data: mail:<userID>:<subID>:<author>
+	parts := strings.Split(callbackData, ":")
+	if len(parts) != 4 {
+		return "無效的請求"
+	}
+	
+	userID, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return "無效的使用者 ID"
+	}
+	
+	subID, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return "無效的訂閱 ID"
+	}
+	
+	recipient := parts[3]
+	if recipient == "" {
+		return "無效的收件者"
+	}
+	
+	// Get subscription to get mail template
+	subRepo := &account.SubscriptionPostgres{}
+	sub, err := subRepo.FindByID(subID)
+	if err != nil {
+		log.WithError(err).Error("Failed to find subscription for mail")
+		return "找不到訂閱設定"
+	}
+	
+	// Check ownership
+	if sub.UserID != userID {
+		return "無權限使用此訂閱"
+	}
+	
+	// Check mail template
+	if sub.Mail == nil || (sub.Mail.Subject == "" && sub.Mail.Content == "") {
+		return "此訂閱尚未設定信件模板"
+	}
+	
+	// Get PTT credentials
+	pttRepo := &account.PTTAccountPostgres{}
+	pttUsername, pttPassword, err := pttRepo.GetCredentials(userID)
+	if err != nil {
+		if err == account.ErrPTTAccountNotFound {
+			return "尚未綁定 PTT 帳號"
+		}
+		log.WithError(err).Error("Failed to get PTT credentials")
+		return "取得 PTT 帳號失敗"
+	}
+	
+	// Send PTT mail
+	mailClient := mail.NewPTTClient(pttUsername, pttPassword)
+	err = mailClient.SendMail(recipient, sub.Mail.Subject, sub.Mail.Content)
+	if err != nil {
+		log.WithError(err).WithFields(log.Fields{
+			"user_id":   userID,
+			"recipient": recipient,
+		}).Error("Failed to send PTT mail")
+		
+		if err == mail.ErrLoginFailed {
+			return "PTT 登入失敗，請確認帳號密碼是否正確"
+		}
+		if err == mail.ErrUserNotFound {
+			return "找不到此 PTT 使用者"
+		}
+		return "寄信失敗，請稍後再試"
+	}
+	
+	log.WithFields(log.Fields{
+		"user_id":   userID,
+		"recipient": recipient,
+		"subject":   sub.Mail.Subject,
+	}).Info("PTT mail sent successfully via Telegram button")
+	
+	return "✅ 已成功寄信給 " + recipient
 }
 
 func showReplyKeyboard(chatID int64) {

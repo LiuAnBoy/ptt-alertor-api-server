@@ -128,6 +128,11 @@ func main() {
 	router.PUT("/api/admin/roles/:role", auth.RequireAdmin(api.AdminUpdateRole))
 	router.DELETE("/api/admin/roles/:role", auth.RequireAdmin(api.AdminDeleteRole))
 
+	// API v1 - PTT Account (VIP+ only)
+	router.GET("/api/ptt-account", auth.JWTAuth(api.GetPTTAccount))
+	router.POST("/api/ptt-account", auth.JWTAuth(api.BindPTTAccount))
+	router.DELETE("/api/ptt-account", auth.JWTAuth(api.UnbindPTTAccount))
+
 	// gops agent
 	if err := agent.Listen(agent.Options{Addr: ":6060", ShutdownCleanup: true}); err != nil {
 		log.Fatal(err)

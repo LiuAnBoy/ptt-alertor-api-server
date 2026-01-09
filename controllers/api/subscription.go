@@ -15,19 +15,27 @@ var subscriptionRepo = &account.SubscriptionPostgres{}
 var subscriptionStatsRepo = &account.SubscriptionStatsPostgres{}
 var redisSync = &account.RedisSync{}
 
+// MailTemplateRequest represents mail template in request
+type MailTemplateRequest struct {
+	Subject string `json:"subject"`
+	Content string `json:"content"`
+}
+
 // CreateSubscriptionRequest represents a subscription creation request
 type CreateSubscriptionRequest struct {
-	Board   string `json:"board"`
-	SubType string `json:"sub_type"`
-	Value   string `json:"value"`
+	Board   string               `json:"board"`
+	SubType string               `json:"sub_type"`
+	Value   string               `json:"value"`
+	Mail    *MailTemplateRequest `json:"mail,omitempty"`
 }
 
 // UpdateSubscriptionRequest represents a subscription update request
 type UpdateSubscriptionRequest struct {
-	Board   string `json:"board"`
-	SubType string `json:"sub_type"`
-	Value   string `json:"value"`
-	Enabled bool   `json:"enabled"`
+	Board   string               `json:"board"`
+	SubType string               `json:"sub_type"`
+	Value   string               `json:"value"`
+	Enabled bool                 `json:"enabled"`
+	Mail    *MailTemplateRequest `json:"mail,omitempty"`
 }
 
 // ListSubscriptions returns all subscriptions for the current user
@@ -229,7 +237,18 @@ func UpdateSubscription(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 	// Store old values for stats sync before update
 	oldBoard, oldSubType, oldValue := sub.Board, sub.SubType, sub.Value
 
-	if err := subscriptionRepo.Update(id, req.Board, req.SubType, req.Value, req.Enabled); err != nil {
+	// Prepare mail template pointers
+	var mailSubject, mailContent *string
+	if req.Mail != nil {
+		if req.Mail.Subject != "" {
+			mailSubject = &req.Mail.Subject
+		}
+		if req.Mail.Content != "" {
+			mailContent = &req.Mail.Content
+		}
+	}
+
+	if err := subscriptionRepo.UpdateWithMail(id, req.Board, req.SubType, req.Value, req.Enabled, mailSubject, mailContent); err != nil {
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "更新訂閱失敗"})
 		return
 	}

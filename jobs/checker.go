@@ -225,7 +225,6 @@ func checkKeyword(keyword string, bd *board.Board, cker Checker) {
 	keywordArticles := make(article.Articles, 0)
 	for _, newAtcl := range bd.NewArticles {
 		if newAtcl.MatchKeyword(keyword) {
-			newAtcl.Author = ""
 			keywordArticles = append(keywordArticles, newAtcl)
 		}
 	}
