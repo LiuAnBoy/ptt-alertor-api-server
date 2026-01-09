@@ -92,7 +92,7 @@ func handleCallbackQuery(update tgbotapi.Update) {
 	case data == "CANCEL":
 		responseText = "取消"
 	case data == "m_x":
-		responseText = "已取消寄信"
+		responseText = "ℹ️ 已取消寄信"
 	case strings.HasPrefix(data, "m_p:"):
 		// Show mail preview with confirm/cancel buttons
 		handleMailPreview(data, chatID)
@@ -385,25 +385,25 @@ func handleMailPreview(callbackData string, chatID int64) {
 	// Parse callback data: m_p:<userID>:<subID>:<author>
 	parts := strings.Split(callbackData, ":")
 	if len(parts) != 4 {
-		SendTextMessage(chatID, "無效的請求")
+		SendTextMessage(chatID, "❌ 無效的請求")
 		return
 	}
 
 	userID, err := strconv.Atoi(parts[1])
 	if err != nil {
-		SendTextMessage(chatID, "無效的使用者 ID")
+		SendTextMessage(chatID, "❌ 無效的使用者 ID")
 		return
 	}
 
 	subID, err := strconv.Atoi(parts[2])
 	if err != nil {
-		SendTextMessage(chatID, "無效的訂閱 ID")
+		SendTextMessage(chatID, "❌ 無效的訂閱 ID")
 		return
 	}
 
 	recipient := parts[3]
 	if recipient == "" {
-		SendTextMessage(chatID, "無效的收件者")
+		SendTextMessage(chatID, "❌ 無效的收件者")
 		return
 	}
 
@@ -412,19 +412,19 @@ func handleMailPreview(callbackData string, chatID int64) {
 	sub, err := subRepo.FindByID(subID)
 	if err != nil {
 		log.WithError(err).Error("Failed to find subscription for mail preview")
-		SendTextMessage(chatID, "找不到訂閱設定")
+		SendTextMessage(chatID, "📭 找不到訂閱設定")
 		return
 	}
 
 	// Check ownership
 	if sub.UserID != userID {
-		SendTextMessage(chatID, "無權限使用此訂閱")
+		SendTextMessage(chatID, "🚫 無權限使用此訂閱")
 		return
 	}
 
 	// Check mail template
 	if sub.Mail == nil || (sub.Mail.Subject == "" && sub.Mail.Content == "") {
-		SendTextMessage(chatID, "此訂閱尚未設定信件模板")
+		SendTextMessage(chatID, "📝 此訂閱尚未設定信件模板")
 		return
 	}
 
@@ -459,22 +459,22 @@ func handleMailConfirm(callbackData string, chatID int64) string {
 	// Parse callback data: m_c:<userID>:<subID>:<author>
 	parts := strings.Split(callbackData, ":")
 	if len(parts) != 4 {
-		return "無效的請求"
+		return "❌ 無效的請求"
 	}
 
 	userID, err := strconv.Atoi(parts[1])
 	if err != nil {
-		return "無效的使用者 ID"
+		return "❌ 無效的使用者 ID"
 	}
 
 	subID, err := strconv.Atoi(parts[2])
 	if err != nil {
-		return "無效的訂閱 ID"
+		return "❌ 無效的訂閱 ID"
 	}
 
 	recipient := parts[3]
 	if recipient == "" {
-		return "無效的收件者"
+		return "❌ 無效的收件者"
 	}
 
 	// Get subscription to get mail template
@@ -482,17 +482,17 @@ func handleMailConfirm(callbackData string, chatID int64) string {
 	sub, err := subRepo.FindByID(subID)
 	if err != nil {
 		log.WithError(err).Error("Failed to find subscription for mail")
-		return "找不到訂閱設定"
+		return "📭 找不到訂閱設定"
 	}
 
 	// Check ownership
 	if sub.UserID != userID {
-		return "無權限使用此訂閱"
+		return "🚫 無權限使用此訂閱"
 	}
 
 	// Check mail template
 	if sub.Mail == nil || (sub.Mail.Subject == "" && sub.Mail.Content == "") {
-		return "此訂閱尚未設定信件模板"
+		return "📝 此訂閱尚未設定信件模板"
 	}
 
 	// Get PTT credentials
@@ -500,10 +500,10 @@ func handleMailConfirm(callbackData string, chatID int64) string {
 	pttUsername, pttPassword, err := pttRepo.GetCredentials(userID)
 	if err != nil {
 		if err == account.ErrPTTAccountNotFound {
-			return "尚未綁定 PTT 帳號"
+			return "⚠️ 尚未綁定 PTT 帳號"
 		}
 		log.WithError(err).Error("Failed to get PTT credentials")
-		return "取得 PTT 帳號失敗"
+		return "❌ 取得 PTT 帳號失敗"
 	}
 
 	// Send PTT mail
@@ -516,12 +516,12 @@ func handleMailConfirm(callbackData string, chatID int64) string {
 		}).Error("Failed to send PTT mail")
 
 		if err == mail.ErrLoginFailed {
-			return "PTT 登入失敗，請確認帳號密碼是否正確"
+			return "🔑 帳號密碼錯誤，請重新設定"
 		}
 		if err == mail.ErrUserNotFound {
-			return "找不到此 PTT 使用者"
+			return "👤 找不到此 PTT 使用者"
 		}
-		return "寄信失敗，請稍後再試"
+		return "❌ 寄信失敗，請稍後再試"
 	}
 
 	log.WithFields(log.Fields{

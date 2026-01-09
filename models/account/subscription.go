@@ -138,7 +138,7 @@ func (p *SubscriptionPostgres) ListByUserID(userID int) ([]*Subscription, error)
 		SELECT id, user_id, board, sub_type, value, enabled, mail_subject, mail_content, created_at, updated_at
 		FROM subscriptions
 		WHERE user_id = $1
-		ORDER BY board, sub_type, value
+		ORDER BY updated_at DESC
 	`, userID)
 	if err != nil {
 		return nil, err
