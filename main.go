@@ -116,21 +116,19 @@ func main() {
 
 	// API v1 - Admin
 	router.POST("/api/admin/login", api.AdminLogin)
-
-	admin := auth.NewAdminRouter(&router.Router)
-	admin.GET("/api/admin/init", api.AdminInit)
-	admin.GET("/api/admin/users", api.AdminListUsers)
-	admin.GET("/api/admin/users/:id", api.AdminGetUser)
-	admin.PUT("/api/admin/users/:id", api.AdminUpdateUser)
-	admin.DELETE("/api/admin/users/:id", api.AdminDeleteUser)
-	admin.POST("/api/admin/broadcast", api.AdminBroadcast)
+	router.GET("/api/admin/init", auth.RequireAdmin(api.AdminInit))
+	router.GET("/api/admin/users", auth.RequireAdmin(api.AdminListUsers))
+	router.GET("/api/admin/users/:id", auth.RequireAdmin(api.AdminGetUser))
+	router.PUT("/api/admin/users/:id", auth.RequireAdmin(api.AdminUpdateUser))
+	router.DELETE("/api/admin/users/:id", auth.RequireAdmin(api.AdminDeleteUser))
+	router.POST("/api/admin/broadcast", auth.RequireAdmin(api.AdminBroadcast))
 
 	// API v1 - Admin Roles
-	admin.GET("/api/admin/roles", api.AdminListRoles)
-	admin.POST("/api/admin/roles", api.AdminCreateRole)
-	admin.GET("/api/admin/roles/:role", api.AdminGetRole)
-	admin.PUT("/api/admin/roles/:role", api.AdminUpdateRole)
-	admin.DELETE("/api/admin/roles/:role", api.AdminDeleteRole)
+	router.GET("/api/admin/roles", auth.RequireAdmin(api.AdminListRoles))
+	router.POST("/api/admin/roles", auth.RequireAdmin(api.AdminCreateRole))
+	router.GET("/api/admin/roles/:role", auth.RequireAdmin(api.AdminGetRole))
+	router.PUT("/api/admin/roles/:role", auth.RequireAdmin(api.AdminUpdateRole))
+	router.DELETE("/api/admin/roles/:role", auth.RequireAdmin(api.AdminDeleteRole))
 
 	// API v1 - PTT Account (VIP+ only)
 	router.POST("/api/ptt-account", auth.JWTAuth(api.BindPTTAccount))
