@@ -30,9 +30,10 @@ var (
 
 // PTTClient represents a PTT WebSocket client
 type PTTClient struct {
-	conn     *websocket.Conn
-	username string
-	password string
+	conn       *websocket.Conn
+	username   string
+	password   string
+	connFailed bool // Flag to indicate connection has failed
 }
 
 // NewPTTClient creates a new PTT client
@@ -314,6 +315,9 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) ([]by
 	if c.conn == nil {
 		return nil, errors.New("connection is nil")
 	}
+	if c.connFailed {
+		return nil, errors.New("connection already failed")
+	}
 
 	var screenData []byte
 	deadline := time.Now().Add(timeout)
@@ -325,11 +329,12 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) ([]by
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
+				c.connFailed = true // Mark connection as failed
 				log.WithFields(log.Fields{
 					"panic":     r,
 					"readCount": readCount,
 					"dataLen":   len(screenData),
-				}).Warn("readScreen panic recovered, returning collected data")
+				}).Warn("readScreen panic recovered, marking connection as failed")
 			}
 		}()
 
@@ -401,11 +406,16 @@ func (c *PTTClient) waitForScreen(ctx context.Context, text string, timeout time
 		default:
 		}
 
+		// Check if connection already failed
+		if c.connFailed {
+			return errors.New("connection already failed")
+		}
+
 		screen, err := c.readScreen(ctx, 1*time.Second)
 		if err != nil {
 			// If connection failed, stop retrying
-			if strings.Contains(err.Error(), "websocket panic") ||
-				strings.Contains(err.Error(), "connection is nil") {
+			if c.connFailed ||
+				strings.Contains(err.Error(), "connection") {
 				return err
 			}
 			continue
