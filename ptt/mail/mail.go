@@ -295,47 +295,35 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 		return errors.New("connection already failed before mail send")
 	}
 
-	// Go to mail section: press 'M' for Mail
-	// In PTT main menu, pressing 'M' enters the mail section
+	// Go to mail section: press 'M' for Mail, then Enter to confirm
+	// In PTT main menu, pressing a letter moves cursor, Enter confirms
 	log.Info("Pressing 'M' for Mail menu")
 	if err := c.sendString("M"); err != nil {
 		return fmt.Errorf("failed to send M: %w", err)
 	}
 
-	// Wait for mail menu - we need to see the mail function screen
-	// NOT just the menu option text. Look for mail list or mail submenu indicators
-	// The mail section shows things like "新信件", "舊信件", "寄發新信" etc.
-	screen, _ := c.readScreen(ctx, 5*time.Second, "新信件", "舊信件", "寄發新信", "郵件選單", "編號")
-	screenStr := string(screen)
-	log.WithField("screen", screenStr).Info("Screen after pressing M")
-
-	if c.connFailed {
-		return errors.New("connection failed after pressing M")
+	// Small delay then press Enter to confirm entry into Mail section
+	time.Sleep(100 * time.Millisecond)
+	log.Info("Pressing Enter to confirm Mail menu entry")
+	if err := c.sendString("\r"); err != nil {
+		return fmt.Errorf("failed to send Enter: %w", err)
 	}
 
-	// Check if we're still at main menu (look for main menu indicators)
-	if strings.Contains(screenStr, "主功能表") && !strings.Contains(screenStr, "新信件") {
-		log.Warn("Still at main menu, pressing Enter to confirm")
-		// Try pressing Enter to confirm the menu selection
-		if err := c.sendString("\r"); err != nil {
-			return fmt.Errorf("failed to send Enter: %w", err)
-		}
-		screen, _ = c.readScreen(ctx, 5*time.Second, "新信件", "舊信件", "寄發新信", "郵件選單", "編號")
-		screenStr = string(screen)
-		log.WithField("screen", screenStr).Info("Screen after pressing Enter")
+	// Wait for mail section screen
+	screen, _ := c.readScreen(ctx, 5*time.Second, "郵件選單", "新信件", "舊信件", "寄發", "信箱")
+	screenStr := string(screen)
+	log.WithField("screen", screenStr).Info("Screen after entering Mail")
 
-		if c.connFailed {
-			return errors.New("connection failed after pressing Enter")
-		}
+	if c.connFailed {
+		return errors.New("connection failed after entering Mail")
 	}
 
 	// Small delay to let screen stabilize
 	time.Sleep(200 * time.Millisecond)
 
 	// Now we should be in mail section
-	// In PTT mail section, pressing 'w' or Ctrl+P for write/compose mail
+	// Press Ctrl+P for write/compose mail (common PTT shortcut)
 	log.Info("Pressing Ctrl+P for Write mail (寄信)")
-	// Ctrl+P (0x10) is often used for posting/writing in PTT
 	if err := c.sendByte(0x10); err != nil {
 		return fmt.Errorf("failed to send Ctrl+P: %w", err)
 	}
