@@ -13,8 +13,6 @@ import (
 
 	log "github.com/Ptt-Alertor/logrus"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/text/encoding/traditionalchinese"
-	"golang.org/x/text/transform"
 )
 
 const (
@@ -201,21 +199,15 @@ func (c *PTTClient) close() {
 	}
 }
 
-// send sends a string to PTT (converts to Big5)
+// send sends a string to PTT
+// Note: When using SSH user "bbsu", PTT expects UTF-8, no conversion needed
 func (c *PTTClient) send(s string) error {
 	if c.stdin == nil {
 		return errors.New("stdin is nil")
 	}
 
-	// Convert UTF-8 to Big5
-	encoder := traditionalchinese.Big5.NewEncoder()
-	big5Bytes, _, err := transform.Bytes(encoder, []byte(s))
-	if err != nil {
-		// Fallback to original bytes if encoding fails
-		big5Bytes = []byte(s)
-	}
-
-	_, err = c.stdin.Write(big5Bytes)
+	// bbsu user expects UTF-8, send directly
+	_, err := c.stdin.Write([]byte(s))
 	return err
 }
 
@@ -234,6 +226,7 @@ func (c *PTTClient) sendByte(b byte) error {
 }
 
 // getScreen returns current screen content as UTF-8 string
+// Note: When using SSH user "bbsu", PTT sends UTF-8 encoded text, no conversion needed
 func (c *PTTClient) getScreen() string {
 	c.screenLock.Lock()
 	defer c.screenLock.Unlock()
@@ -242,20 +235,8 @@ func (c *PTTClient) getScreen() string {
 		return ""
 	}
 
-	rawBytes := c.screenBuf.Bytes()
-
-	// Convert Big5 to UTF-8
-	decoder := traditionalchinese.Big5.NewDecoder()
-	utf8Bytes, _, err := transform.Bytes(decoder, rawBytes)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"error":     err,
-			"raw_len":   len(rawBytes),
-			"raw_first": fmt.Sprintf("%x", rawBytes[:min(50, len(rawBytes))]),
-		}).Warn("Big5 decode error, returning raw")
-		return string(rawBytes)
-	}
-	return string(utf8Bytes)
+	// bbsu user sends UTF-8, no need to decode Big5
+	return c.screenBuf.String()
 }
 
 // getScreenRaw returns current screen content as raw bytes for debugging
