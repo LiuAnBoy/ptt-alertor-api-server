@@ -168,6 +168,58 @@ air
 | DELETE | `/api/admin/users/:id` | 刪除用戶 |
 | POST | `/api/admin/broadcast` | 發送廣播訊息 |
 
+### 角色管理 API (管理員)
+
+| Method | Endpoint | 說明 |
+|--------|----------|------|
+| GET | `/api/admin/roles` | 取得所有角色 |
+| POST | `/api/admin/roles` | 新增角色 |
+| GET | `/api/admin/roles/:role` | 取得單一角色 |
+| PUT | `/api/admin/roles/:role` | 更新角色 |
+| DELETE | `/api/admin/roles/:role` | 刪除角色 |
+
+#### 角色資料結構
+
+```json
+{
+  "role": "vip",
+  "max_subscriptions": 20,
+  "description": "VIP 用戶",
+  "user_count": 5,
+  "created_at": "2024-01-01T00:00:00Z",
+  "updated_at": "2024-01-01T00:00:00Z"
+}
+```
+
+#### 新增/更新角色範例
+
+**新增角色 (POST)**
+```json
+{
+  "role": "premium",
+  "max_subscriptions": 50,
+  "description": "Premium 用戶"
+}
+```
+
+**更新角色 (PUT)**
+```json
+{
+  "max_subscriptions": 100,
+  "description": "Premium 用戶 - 升級版"
+}
+```
+
+#### 預設角色
+
+| 角色 | max_subscriptions | 說明 |
+|------|------------------|------|
+| admin | -1 | 管理員，無限制 |
+| vip | 20 | VIP 用戶 |
+| user | 3 | 一般用戶 |
+
+> **注意**：內建角色 (admin, user) 無法刪除。若角色正在被用戶使用，也無法刪除。
+
 ### 看板 API
 
 | Method | Endpoint | 說明 |
@@ -199,6 +251,7 @@ air
 psql -h localhost -U admin -d ptt_alertor -f migrations/001_users.sql
 psql -h localhost -U admin -d ptt_alertor -f migrations/002_subscriptions.sql
 psql -h localhost -U admin -d ptt_alertor -f migrations/add_subscription_stats.sql
+psql -h localhost -U admin -d ptt_alertor -f migrations/add_role_limits.sql
 # ...
 ```
 
@@ -207,6 +260,15 @@ psql -h localhost -U admin -d ptt_alertor -f migrations/add_subscription_stats.s
 ```bash
 source .env
 docker exec -i ptt-alertor-postgres psql -U $PG_USER -d $PG_DATABASE < migrations/add_subscription_stats.sql
+docker exec -i ptt-alertor-postgres psql -U $PG_USER -d $PG_DATABASE < migrations/add_role_limits.sql
+```
+
+### 全新安裝
+
+全新安裝請直接使用 `init.sql`：
+
+```bash
+docker exec -i ptt-alertor-postgres psql -U $PG_USER -d $PG_DATABASE < migrations/init.sql
 ```
 
 ## 部署
