@@ -1,6 +1,7 @@
 package article
 
 import (
+	"strconv"
 	"strings"
 
 	log "github.com/Ptt-Alertor/logrus"
@@ -28,8 +29,15 @@ func (as Articles) List() []string {
 
 func (as Articles) String() string {
 	var content string
-	for _, a := range as {
-		content += "\r\n\r\n" + a.String()
+	// Show numbered format when multiple articles
+	if len(as) > 1 {
+		for i, a := range as {
+			content += "\r\n\r\n#" + strconv.Itoa(i+1) + "\r\n" + a.String()
+		}
+	} else {
+		for _, a := range as {
+			content += "\r\n\r\n" + a.String()
+		}
 	}
 	return content
 }

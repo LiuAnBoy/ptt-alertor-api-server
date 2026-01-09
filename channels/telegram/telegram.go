@@ -350,10 +350,12 @@ func sendTextMessageWithMailButton(chatID int64, text string, mailDataList []*Ma
 
 		// Check if callback data is within Telegram's limit (64 bytes)
 		if len(callbackData) <= 64 {
-			// Button text: 📧 作者名(index)
-			buttonText := "📧 " + mailData.ArticleAuthor
+			// Button text: multiple articles show "寄信給#N作者", single shows "寄信給作者"
+			var buttonText string
 			if len(mailDataList) > 1 {
-				buttonText += "(" + strconv.Itoa(mailData.ArticleIndex) + ")"
+				buttonText = "📧 寄信給#" + strconv.Itoa(mailData.ArticleIndex) + "作者"
+			} else {
+				buttonText = "📧 寄信給作者"
 			}
 			buttons = append(buttons, tgbotapi.NewInlineKeyboardButtonData(buttonText, callbackData))
 		}
