@@ -11,10 +11,10 @@ import (
 
 // ArticleStats represents article statistics
 type ArticleStats struct {
-	Total   int            `json:"total"`
-	Today   int            `json:"today"`
-	ByBoard []BoardCount   `json:"byBoard"`
-	TopPush *TopPushArticle `json:"topPush"`
+	Total   int              `json:"total"`
+	Today   int              `json:"today"`
+	ByBoard []BoardCount     `json:"byBoard"`
+	TopPush []TopPushArticle `json:"topPush"`
 }
 
 // BoardCount represents article count per board
@@ -163,16 +163,20 @@ func GetAdminStats() (*AdminInitResponse, error) {
 		}
 	}
 
-	// Top push article
-	var topPush TopPushArticle
-	err := pool.QueryRow(ctx, `
+	// Top 5 push articles (ordered by total push count: positive + neutral + negative)
+	topPushRows, _ := pool.Query(ctx, `
 		SELECT code, title, board_name, author, positive_count, neutral_count, negative_count
 		FROM articles
-		ORDER BY push_sum DESC
-		LIMIT 1
-	`).Scan(&topPush.Code, &topPush.Title, &topPush.Board, &topPush.Author, &topPush.Push.Positive, &topPush.Push.Neutral, &topPush.Push.Negative)
-	if err == nil {
-		response.Articles.TopPush = &topPush
+		ORDER BY (positive_count + neutral_count + negative_count) DESC
+		LIMIT 5
+	`)
+	if topPushRows != nil {
+		defer topPushRows.Close()
+		for topPushRows.Next() {
+			var tp TopPushArticle
+			topPushRows.Scan(&tp.Code, &tp.Title, &tp.Board, &tp.Author, &tp.Push.Positive, &tp.Push.Neutral, &tp.Push.Negative)
+			response.Articles.TopPush = append(response.Articles.TopPush, tp)
+		}
 	}
 
 	// 2. User statistics
