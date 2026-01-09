@@ -120,8 +120,16 @@ func (rs *RedisSync) addToSubscriberSet(board, subType, account string) error {
 	conn := connections.Redis()
 	defer conn.Close()
 
+	// Add board to boards set (so checker will scan it)
+	_, err := conn.Do("SADD", "boards", board)
+	if err != nil {
+		log.WithError(err).Error("Failed to add board to boards set")
+		return err
+	}
+
+	// Add account to subscriber set
 	key := fmt.Sprintf("%s:%s:subs", subType, board)
-	_, err := conn.Do("SADD", key, account)
+	_, err = conn.Do("SADD", key, account)
 	if err != nil {
 		log.WithError(err).Error("Failed to add to subscriber set")
 		return err
