@@ -259,7 +259,15 @@ func (c *PTTClient) sendByte(b byte) error {
 }
 
 // readScreen reads screen data from PTT
-func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) ([]byte, error) {
+func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) (result []byte, err error) {
+	// Recover from panic (gorilla/websocket panics on failed connection read)
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("websocket panic: %v", r)
+			result = nil
+		}
+	}()
+
 	if c.conn == nil {
 		return nil, errors.New("connection is nil")
 	}
@@ -270,8 +278,8 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) ([]by
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		_, data, err := c.conn.ReadMessage()
-		if err != nil {
+		_, data, readErr := c.conn.ReadMessage()
+		if readErr != nil {
 			// Any error means we should stop reading
 			break
 		}
@@ -280,8 +288,8 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) ([]by
 
 	// Convert Big5 to UTF-8
 	decoder := traditionalchinese.Big5.NewDecoder()
-	utf8Bytes, _, err := transform.Bytes(decoder, screenData)
-	if err != nil {
+	utf8Bytes, _, decodeErr := transform.Bytes(decoder, screenData)
+	if decodeErr != nil {
 		return screenData, nil
 	}
 
