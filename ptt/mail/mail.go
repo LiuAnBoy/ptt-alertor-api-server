@@ -1,23 +1,25 @@
 package mail
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
+	"sync"
 	"time"
 
 	log "github.com/Ptt-Alertor/logrus"
-	"github.com/gorilla/websocket"
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/text/encoding/traditionalchinese"
 	"golang.org/x/text/transform"
 )
 
 const (
-	pttWSURL       = "wss://ws.ptt.cc/bbs"
-	pttOrigin      = "https://term.ptt.cc"
-	readTimeout    = 10 * time.Second
-	writeTimeout   = 5 * time.Second
+	pttHost        = "ptt.cc:22"
+	pttSSHUser     = "bbsu"
 	connectTimeout = 15 * time.Second
 )
 
@@ -28,14 +30,17 @@ var (
 	ErrUserNotFound   = errors.New("recipient user not found")
 )
 
-// PTTClient represents a PTT WebSocket client
+// PTTClient represents a PTT SSH client
 type PTTClient struct {
-	conn       *websocket.Conn
 	username   string
 	password   string
-	connFailed bool // Flag to indicate connection has failed
-	readCh     chan []byte // Channel for receiving data from read goroutine
-	closeCh    chan struct{} // Channel to signal read goroutine to stop
+	client     *ssh.Client
+	session    *ssh.Session
+	stdin      io.WriteCloser
+	stdout     io.Reader
+	screenBuf  bytes.Buffer
+	screenLock sync.Mutex
+	stopRead   chan struct{}
 }
 
 // NewPTTClient creates a new PTT client
@@ -48,21 +53,16 @@ func NewPTTClient(username, password string) *PTTClient {
 
 // SendMail sends a mail to a recipient on PTT
 func (c *PTTClient) SendMail(recipient, subject, content string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// Connect to PTT
-	log.Info("Connecting to PTT WebSocket...")
+	// Connect to PTT via SSH
+	log.Info("Connecting to PTT via SSH...")
 	if err := c.connect(ctx); err != nil {
 		return fmt.Errorf("connect failed: %w", err)
 	}
 	defer c.close()
-	log.Info("PTT WebSocket connected")
-
-	// Read immediately and stop as soon as we see login prompt
-	// This prevents the connection from being closed by PTT due to inactivity
-	initialScreen, _ := c.readScreen(ctx, 5*time.Second, "請輸入代號")
-	log.WithField("screen", string(initialScreen)).Info("Initial screen after connect")
+	log.Info("PTT SSH connected")
 
 	// Login
 	if err := c.login(ctx); err != nil {
@@ -77,443 +77,121 @@ func (c *PTTClient) SendMail(recipient, subject, content string) error {
 	return nil
 }
 
-// connect establishes WebSocket connection to PTT
-func (c *PTTClient) connect(ctx context.Context) error {
-	dialer := websocket.Dialer{
-		HandshakeTimeout: connectTimeout,
+// connect establishes SSH connection to PTT
+func (c *PTTClient) connect(_ context.Context) error {
+	cfg := &ssh.ClientConfig{
+		User: pttSSHUser,
+		Auth: []ssh.AuthMethod{
+			ssh.Password(c.password),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         connectTimeout,
 	}
 
-	header := make(map[string][]string)
-	header["Origin"] = []string{pttOrigin}
-
-	conn, _, err := dialer.DialContext(ctx, pttWSURL, header)
+	client, err := ssh.Dial("tcp", pttHost, cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("ssh dial failed: %w", err)
+	}
+	c.client = client
+
+	sess, err := client.NewSession()
+	if err != nil {
+		client.Close()
+		return fmt.Errorf("new session failed: %w", err)
+	}
+	c.session = sess
+
+	// Request PTY (critical for PTT UI)
+	modes := ssh.TerminalModes{
+		ssh.ECHO:          0,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	}
+	if err := sess.RequestPty("xterm", 40, 120, modes); err != nil {
+		sess.Close()
+		client.Close()
+		return fmt.Errorf("request pty failed: %w", err)
 	}
 
-	c.conn = conn
-	c.readCh = make(chan []byte, 100) // Buffer for incoming data
-	c.closeCh = make(chan struct{})
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		sess.Close()
+		client.Close()
+		return fmt.Errorf("stdin pipe failed: %w", err)
+	}
+	c.stdin = stdin
 
-	// Start a single goroutine to read from websocket
-	// This prevents concurrent reads which cause gorilla/websocket to panic
+	stdout, err := sess.StdoutPipe()
+	if err != nil {
+		sess.Close()
+		client.Close()
+		return fmt.Errorf("stdout pipe failed: %w", err)
+	}
+	c.stdout = stdout
+
+	if err := sess.Shell(); err != nil {
+		sess.Close()
+		client.Close()
+		return fmt.Errorf("start shell failed: %w", err)
+	}
+
+	// Start background reader
+	c.stopRead = make(chan struct{})
 	go c.readLoop()
 
 	return nil
 }
 
-// Telnet protocol constants
-const (
-	IAC  = 255 // Interpret As Command
-	DONT = 254
-	DO   = 253
-	WONT = 252
-	WILL = 251
-	SB   = 250 // Sub-negotiation Begin
-	SE   = 240 // Sub-negotiation End
-
-	TERMINAL_TYPE = 24
-	NAWS          = 31 // Negotiate About Window Size
-)
-
-// handleTelnetNegotiation processes and responds to Telnet commands in the data
-func (c *PTTClient) handleTelnetNegotiation(data []byte) {
-	if len(data) < 3 {
-		return
-	}
-
-	i := 0
-	for i <= len(data)-3 {
-		if data[i] == IAC {
-			cmd := data[i+1]
-			opt := data[i+2]
-
-			switch cmd {
-			case DO:
-				log.WithFields(log.Fields{"cmd": "DO", "opt": opt}).Debug("Telnet negotiation")
-				switch opt {
-				case TERMINAL_TYPE:
-					c.sendBytes([]byte{IAC, WILL, TERMINAL_TYPE})
-				case NAWS:
-					// Send WILL NAWS and then window size: 80x24
-					c.sendBytes([]byte{IAC, WILL, NAWS})
-					c.sendBytes([]byte{IAC, SB, NAWS, 0, 80, 0, 24, IAC, SE})
-				default:
-					// Accept other options
-					c.sendBytes([]byte{IAC, WILL, opt})
-				}
-				i += 3
-			case WILL:
-				log.WithFields(log.Fields{"cmd": "WILL", "opt": opt}).Debug("Telnet negotiation")
-				c.sendBytes([]byte{IAC, DO, opt})
-				i += 3
-			case WONT:
-				log.WithFields(log.Fields{"cmd": "WONT", "opt": opt}).Debug("Telnet negotiation")
-				c.sendBytes([]byte{IAC, DONT, opt})
-				i += 3
-			case DONT:
-				log.WithFields(log.Fields{"cmd": "DONT", "opt": opt}).Debug("Telnet negotiation")
-				c.sendBytes([]byte{IAC, WONT, opt})
-				i += 3
-			case SB:
-				// Sub-negotiation - find SE
-				seFound := false
-				for j := i + 3; j <= len(data)-2; j++ {
-					if data[j] == IAC && data[j+1] == SE {
-						// Terminal type request (SB TERMINAL_TYPE 1 ... IAC SE)
-						if opt == TERMINAL_TYPE && i+3 < len(data) && data[i+3] == 1 {
-							log.Info("Telnet: Sending terminal type VT100")
-							response := []byte{IAC, SB, TERMINAL_TYPE, 0}
-							response = append(response, []byte("VT100")...)
-							response = append(response, IAC, SE)
-							c.sendBytes(response)
-						}
-						i = j + 2
-						seFound = true
-						break
-					}
-				}
-				if !seFound {
-					// SE not found, skip this IAC
-					i++
-				}
-			default:
-				// Unknown command or escape sequence, skip
-				i++
-			}
-		} else {
-			i++
-		}
-	}
-}
-
-// sendBytes sends raw bytes without encoding
-func (c *PTTClient) sendBytes(data []byte) error {
-	if c.conn == nil {
-		return errors.New("connection is nil")
-	}
-	c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	return c.conn.WriteMessage(websocket.BinaryMessage, data)
-}
-
-// close closes the WebSocket connection
-func (c *PTTClient) close() {
-	// Signal read goroutine to stop
-	if c.closeCh != nil {
-		close(c.closeCh)
-	}
-	if c.conn != nil {
-		c.conn.Close()
-	}
-}
-
-
-// readLoop continuously reads from websocket and sends data to channel
-// This ensures only one goroutine reads from the connection at a time
+// readLoop continuously reads from stdout and accumulates in buffer
 func (c *PTTClient) readLoop() {
-	defer func() {
-		if r := recover(); r != nil {
-			log.WithField("panic", r).Warn("readLoop panic recovered")
-			c.connFailed = true
-		}
-	}()
+	reader := bufio.NewReader(c.stdout)
+	buf := make([]byte, 4096)
 
 	for {
 		select {
-		case <-c.closeCh:
+		case <-c.stopRead:
 			return
 		default:
 		}
 
-		_, data, err := c.conn.ReadMessage()
+		n, err := reader.Read(buf)
+		if n > 0 {
+			c.screenLock.Lock()
+			c.screenBuf.Write(buf[:n])
+			// Prevent unbounded growth
+			if c.screenBuf.Len() > 50000 {
+				tmp := c.screenBuf.Bytes()
+				c.screenBuf.Reset()
+				c.screenBuf.Write(tmp[len(tmp)-20000:])
+			}
+			c.screenLock.Unlock()
+		}
 		if err != nil {
-			errStr := err.Error()
-			// Check for fatal errors
-			if strings.Contains(errStr, "use of closed") ||
-				strings.Contains(errStr, "connection reset") ||
-				strings.Contains(errStr, "broken pipe") ||
-				strings.Contains(errStr, "EOF") {
-				log.WithError(err).Warn("readLoop: connection error")
-				c.connFailed = true
-				return
+			if err != io.EOF {
+				log.WithError(err).Debug("readLoop error")
 			}
-			// For other errors, continue
-			continue
-		}
-
-		// Send data to channel (non-blocking)
-		select {
-		case c.readCh <- data:
-		default:
-			// Channel full, drop data (shouldn't happen with buffer)
-			log.Warn("readLoop: channel full, dropping data")
+			return
 		}
 	}
 }
 
-// login performs PTT login
-func (c *PTTClient) login(ctx context.Context) error {
-	log.Info("Starting PTT login")
-
-	// Send username immediately (we already saw the login prompt)
-	log.WithField("username", c.username).Info("Sending username")
-	if err := c.sendString(c.username + "\r"); err != nil {
-		return err
+// close closes the SSH connection
+func (c *PTTClient) close() {
+	if c.stopRead != nil {
+		close(c.stopRead)
 	}
-
-	// Wait for password prompt
-	screen, _ := c.readScreen(ctx, 3*time.Second, "請輸入您的密碼")
-	if !strings.Contains(string(screen), "請輸入您的密碼") {
-		log.WithField("screen", string(screen)).Info("Did not see password prompt")
+	if c.session != nil {
+		c.session.Close()
 	}
-
-	// Send password
-	log.Info("Sending password")
-	if err := c.sendString(c.password + "\r"); err != nil {
-		return err
+	if c.client != nil {
+		c.client.Close()
 	}
-
-	// Handle post-login screens - keep reading until main menu or error
-	for i := range 15 {
-		if c.connFailed {
-			log.Warn("Connection failed during login")
-			break
-		}
-
-		// Read screen with multiple stop conditions
-		screen, _ = c.readScreen(ctx, 3*time.Second, "主功能表", "重複登入", "按任意鍵", "密碼不對", "錯誤")
-		screenStr := string(screen)
-
-		if screenStr == "" {
-			continue
-		}
-
-		log.WithFields(log.Fields{"iteration": i, "screen": screenStr}).Info("Login screen")
-
-		// Check for login failure FIRST
-		if strings.Contains(screenStr, "密碼不對") {
-			return ErrLoginFailed
-		}
-
-		// Check if we reached main menu
-		if strings.Contains(screenStr, "主功能表") {
-			log.Info("Login successful, reached main menu")
-			return nil
-		}
-
-		// Press space to continue - CHECK THIS FIRST (before "登入中")
-		// Because screen might contain both "登入中" and "按任意鍵"
-		if strings.Contains(screenStr, "請按任意鍵繼續") ||
-			strings.Contains(screenStr, "按任意鍵") ||
-			strings.Contains(screenStr, "您要刪除以上錯誤嘗試") ||
-			strings.Contains(screenStr, "錯誤嘗試") {
-			log.Info("Pressing space to continue")
-			if err := c.sendString(" "); err != nil {
-				log.WithError(err).Warn("Failed to send space")
-			}
-			continue
-		}
-
-		// Handle duplicate login IMMEDIATELY - this is time-sensitive
-		if strings.Contains(screenStr, "您想刪除其他重複登入") || strings.Contains(screenStr, "重複登入") {
-			log.Info("Handling duplicate login prompt, sending N")
-			if err := c.sendString("n\r"); err != nil {
-				log.WithError(err).Warn("Failed to send N for duplicate login")
-			}
-			continue
-		}
-
-		// "密碼正確" without "按任意鍵" - wait for next screen
-		if strings.Contains(screenStr, "密碼正確") {
-			log.Info("Password correct, waiting for next screen...")
-			continue
-		}
-
-		// "登入中，請稍候" without "按任意鍵" - just wait
-		if strings.Contains(screenStr, "登入中") || strings.Contains(screenStr, "請稍候") {
-			log.Info("Login in progress, waiting...")
-			continue
-		}
-
-		// Don't send anything for unknown screens - just wait
-		log.WithField("screen", screenStr).Info("Unknown screen, waiting...")
-	}
-
-	// Even if main menu not detected, if we're not at login screen, consider it successful
-	log.Info("Login flow completed")
-	return nil
 }
 
-// sendMailInternal sends mail after login
-func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, content string) error {
-	log.WithField("recipient", recipient).Info("Starting mail send process")
-
-	if c.connFailed {
-		return errors.New("connection already failed before mail send")
-	}
-
-	// First, ensure we're at a clean state by pressing 'q' to go back if needed
-	log.Info("Pressing 'q' to ensure clean state")
-	if err := c.sendString("q"); err != nil {
-		return fmt.Errorf("failed to send q: %w", err)
-	}
-	time.Sleep(200 * time.Millisecond)
-
-	// Step 1: Press 'M' (uppercase) to enter mail section from main menu
-	log.Info("Pressing 'M' for Mail menu")
-	if err := c.sendString("M"); err != nil {
-		return fmt.Errorf("failed to send M: %w", err)
-	}
-
-	// Wait for mail menu - should see mail options
-	screen, _ := c.readScreen(ctx, 5*time.Second, "郵件選單", "我的信箱", "電子郵件", "寄發新信", "站內寄信")
-	screenStr := string(screen)
-	log.WithField("screen", screenStr).Info("Screen after pressing M")
-
-	if c.connFailed {
-		return errors.New("connection failed after pressing M")
-	}
-
-	// Check if we're in mail section
-	if !strings.Contains(screenStr, "郵件選單") &&
-		!strings.Contains(screenStr, "我的信箱") &&
-		!strings.Contains(screenStr, "電子郵件") &&
-		!strings.Contains(screenStr, "站內寄信") {
-		log.Warn("Not in mail section, trying Enter then M")
-		// Try pressing Enter first then M
-		c.sendString("\r")
-		time.Sleep(100 * time.Millisecond)
-		c.sendString("M")
-		screen, _ = c.readScreen(ctx, 5*time.Second, "郵件選單", "我的信箱", "電子郵件", "寄發新信", "站內寄信")
-		screenStr = string(screen)
-		log.WithField("screen", screenStr).Info("Screen after Enter+M")
-	}
-
-	// Step 2: Press Ctrl+P to compose new mail (shown as ^P in menu)
-	// This is the shortcut shown in PTT mail menu: (^P)寄發新信
-	log.Info("Pressing Ctrl+P for compose new mail")
-	if err := c.sendByte(0x10); err != nil { // Ctrl+P = 0x10
-		return fmt.Errorf("failed to send Ctrl+P: %w", err)
-	}
-
-	// Wait for recipient prompt
-	screen, _ = c.readScreen(ctx, 5*time.Second, "收信人", "站內寄信", "代號")
-	screenStr = string(screen)
-	log.WithField("screen", screenStr).Info("Screen after pressing Ctrl+P")
-
-	if c.connFailed {
-		return errors.New("connection failed after pressing Ctrl+P")
-	}
-
-	// If Ctrl+P didn't work, try 'S' (uppercase) for Send
-	if !strings.Contains(screenStr, "收信人") &&
-		!strings.Contains(screenStr, "站內寄信") {
-		log.Warn("Did not find recipient prompt with Ctrl+P, trying 'S'")
-		if err := c.sendString("S"); err != nil {
-			return fmt.Errorf("failed to send S: %w", err)
-		}
-		screen, _ = c.readScreen(ctx, 5*time.Second, "收信人", "站內寄信", "代號")
-		screenStr = string(screen)
-		log.WithField("screen", screenStr).Info("Screen after pressing S")
-
-		if c.connFailed {
-			return errors.New("connection failed after pressing S")
-		}
-	}
-
-	// Step 3: Enter recipient and press Enter
-	log.WithField("recipient", recipient).Info("Entering recipient")
-	if err := c.sendString(recipient + "\r"); err != nil {
-		return fmt.Errorf("failed to send recipient: %w", err)
-	}
-
-	// Wait for subject prompt or error
-	screen, _ = c.readScreen(ctx, 5*time.Second, "標題", "主題", "無此帳號", "找不到")
-	screenStr = string(screen)
-	log.WithField("screen", screenStr).Info("Screen after entering recipient")
-
-	if strings.Contains(screenStr, "無此帳號") ||
-		strings.Contains(screenStr, "找不到這位使用者") ||
-		strings.Contains(screenStr, "找不到") {
-		return ErrUserNotFound
-	}
-
-	if c.connFailed {
-		return errors.New("connection failed after entering recipient")
-	}
-
-	// Step 4: Enter subject and press Enter
-	log.WithField("subject", subject).Info("Entering subject")
-	if err := c.sendString(subject + "\r"); err != nil {
-		return fmt.Errorf("failed to send subject: %w", err)
-	}
-
-	// Wait for content editor
-	screen, _ = c.readScreen(ctx, 3*time.Second, "編輯", "內文", "Ctrl")
-	log.WithField("screen", string(screen)).Info("Screen after entering subject")
-
-	if c.connFailed {
-		return errors.New("connection failed after entering subject")
-	}
-
-	// Step 5: Enter content line by line
-	log.WithField("content_lines", len(strings.Split(content, "\n"))).Info("Entering mail content")
-	for _, line := range strings.Split(content, "\n") {
-		if err := c.sendString(line + "\r"); err != nil {
-			return fmt.Errorf("failed to send content line: %w", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	// Step 6: Press Ctrl+X to finish editing
-	log.Info("Sending Ctrl+X to finish editing")
-	if err := c.sendByte(0x18); err != nil {
-		return fmt.Errorf("failed to send Ctrl+X: %w", err)
-	}
-
-	// Wait for save prompt
-	screen, _ = c.readScreen(ctx, 3*time.Second, "檔案處理", "存檔", "儲存", "確定要離開")
-	log.WithField("screen", string(screen)).Info("Screen after Ctrl+X")
-
-	// Step 7: Press 's' to save and send
-	log.Info("Pressing 's' to save and send")
-	if err := c.sendString("s"); err != nil {
-		return fmt.Errorf("failed to send s: %w", err)
-	}
-
-	// Wait for draft prompt
-	screen, _ = c.readScreen(ctx, 3*time.Second, "存底", "底稿", "自存底稿", "是否")
-	log.WithField("screen", string(screen)).Info("Screen after pressing s")
-
-	// Step 8: Press 'N' to not save draft
-	log.Info("Pressing 'n' to not save draft")
-	if err := c.sendString("n"); err != nil {
-		return fmt.Errorf("failed to send n: %w", err)
-	}
-
-	// Check result
-	screen, _ = c.readScreen(ctx, 5*time.Second, "信件已", "寄出", "完成", "成功", "順利")
-	screenStr = string(screen)
-
-	log.WithFields(log.Fields{
-		"recipient": recipient,
-		"subject":   subject,
-		"screen":    screenStr,
-	}).Info("PTT mail send result screen")
-
-	// Even without clear success message, if we got this far it likely worked
-	log.WithFields(log.Fields{
-		"recipient": recipient,
-		"subject":   subject,
-	}).Info("PTT mail sent successfully")
-
-	return nil
-}
-
-// sendString sends a string to PTT (converts to Big5)
-func (c *PTTClient) sendString(s string) error {
-	if c.conn == nil {
-		return errors.New("connection is nil")
+// send sends a string to PTT (converts to Big5)
+func (c *PTTClient) send(s string) error {
+	if c.stdin == nil {
+		return errors.New("stdin is nil")
 	}
 
 	// Convert UTF-8 to Big5
@@ -524,134 +202,289 @@ func (c *PTTClient) sendString(s string) error {
 		big5Bytes = []byte(s)
 	}
 
-	c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	return c.conn.WriteMessage(websocket.BinaryMessage, big5Bytes)
+	_, err = c.stdin.Write(big5Bytes)
+	return err
+}
+
+// sendLine sends a string followed by Enter
+func (c *PTTClient) sendLine(s string) error {
+	return c.send(s + "\r")
 }
 
 // sendByte sends a single byte (for control characters)
 func (c *PTTClient) sendByte(b byte) error {
-	if c.conn == nil {
-		return errors.New("connection is nil")
+	if c.stdin == nil {
+		return errors.New("stdin is nil")
 	}
-	c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	return c.conn.WriteMessage(websocket.BinaryMessage, []byte{b})
+	_, err := c.stdin.Write([]byte{b})
+	return err
 }
 
-// readScreen reads screen data from PTT
-// stopText: if non-empty, stop reading when this text is found (allows early return)
-func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration, stopText ...string) ([]byte, error) {
-	if c.conn == nil {
-		return nil, errors.New("connection is nil")
-	}
-	if c.connFailed {
-		return nil, errors.New("connection already failed")
-	}
+// getScreen returns current screen content as UTF-8 string
+func (c *PTTClient) getScreen() string {
+	c.screenLock.Lock()
+	defer c.screenLock.Unlock()
 
-	var screenData []byte
-	deadline := time.Now().Add(timeout)
-	readCount := 0
-	stopReading := false
-
-	for time.Now().Before(deadline) && !stopReading && !c.connFailed {
-		// Wait for data from channel or timeout
-		select {
-		case data := <-c.readCh:
-			readCount++
-			if readCount <= 5 {
-				log.WithFields(log.Fields{
-					"dataLen":  len(data),
-					"rawBytes": fmt.Sprintf("%v", data[:min(50, len(data))]),
-				}).Info("ReadMessage received data")
-			}
-
-			// Handle Telnet negotiation commands in the data
-			c.handleTelnetNegotiation(data)
-
-			screenData = append(screenData, data...)
-
-			// Check if we should stop reading (found any stop text)
-			if len(stopText) > 0 {
-				decoder := traditionalchinese.Big5.NewDecoder()
-				utf8Bytes, _, _ := transform.Bytes(decoder, screenData)
-				utf8Str := string(utf8Bytes)
-				for _, st := range stopText {
-					if st != "" && strings.Contains(utf8Str, st) {
-						log.WithField("stopText", st).Info("Found stop text, stopping read")
-						stopReading = true
-						break
-					}
-				}
-			}
-
-		case <-time.After(500 * time.Millisecond):
-			// Timeout waiting for this chunk
-			// If we have data, we can return it
-			if len(screenData) > 0 {
-				stopReading = true
-			}
-			// Otherwise continue trying until overall deadline
-		}
-	}
-
-	log.WithFields(log.Fields{
-		"readCount":  readCount,
-		"totalBytes": len(screenData),
-	}).Info("readScreen finished")
-
-	if len(screenData) == 0 {
-		return nil, nil
+	if c.screenBuf.Len() == 0 {
+		return ""
 	}
 
 	// Convert Big5 to UTF-8
 	decoder := traditionalchinese.Big5.NewDecoder()
-	utf8Bytes, _, decodeErr := transform.Bytes(decoder, screenData)
-	if decodeErr != nil {
-		log.WithError(decodeErr).Warn("Big5 decode failed, returning raw data")
-		return screenData, nil
+	utf8Bytes, _, err := transform.Bytes(decoder, c.screenBuf.Bytes())
+	if err != nil {
+		return c.screenBuf.String()
 	}
-
-	log.WithField("utf8Len", len(utf8Bytes)).Info("Big5 decode success")
-	return utf8Bytes, nil
+	return string(utf8Bytes)
 }
 
-// waitForScreen waits for specific text to appear on screen
-func (c *PTTClient) waitForScreen(ctx context.Context, text string, timeout time.Duration) error {
+// clearScreen clears the screen buffer
+func (c *PTTClient) clearScreen() {
+	c.screenLock.Lock()
+	defer c.screenLock.Unlock()
+	c.screenBuf.Reset()
+}
+
+// waitFor waits for any of the specified texts to appear on screen
+func (c *PTTClient) waitFor(ctx context.Context, timeout time.Duration, texts ...string) (string, bool) {
 	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		// Check if connection already failed
-		if c.connFailed {
-			return errors.New("connection already failed")
-		}
-
-		screen, err := c.readScreen(ctx, 1*time.Second)
-		if err != nil {
-			// If connection failed, stop retrying
-			if c.connFailed ||
-				strings.Contains(err.Error(), "connection") {
-				return err
+			return c.getScreen(), false
+		case <-ticker.C:
+			screen := c.getScreen()
+			for _, text := range texts {
+				if text != "" && strings.Contains(screen, text) {
+					return screen, true
+				}
 			}
+		}
+	}
+	return c.getScreen(), false
+}
+
+// login performs PTT login
+func (c *PTTClient) login(ctx context.Context) error {
+	log.Info("Starting PTT login")
+
+	// Wait for login prompt
+	screen, found := c.waitFor(ctx, 10*time.Second, "請輸入代號", "代號")
+	log.WithField("screen_preview", truncate(screen, 200)).Info("Initial screen")
+
+	if !found {
+		return errors.New("login prompt not found")
+	}
+
+	// Send username
+	log.WithField("username", c.username).Info("Sending username")
+	if err := c.sendLine(c.username); err != nil {
+		return err
+	}
+
+	// Wait for password prompt
+	screen, found = c.waitFor(ctx, 5*time.Second, "請輸入您的密碼", "密碼")
+	if !found {
+		log.WithField("screen", truncate(screen, 300)).Warn("Password prompt not found")
+	}
+
+	// Send password
+	log.Info("Sending password")
+	if err := c.sendLine(c.password); err != nil {
+		return err
+	}
+
+	// Handle post-login screens
+	for i := range 20 {
+		time.Sleep(300 * time.Millisecond)
+		screen = c.getScreen()
+		log.WithFields(log.Fields{
+			"iteration":      i,
+			"screen_preview": truncate(screen, 300),
+		}).Debug("Login screen check")
+
+		// Check for login failure
+		if strings.Contains(screen, "密碼不對") || strings.Contains(screen, "錯誤") && strings.Contains(screen, "密碼") {
+			return ErrLoginFailed
+		}
+
+		// Check if we reached main menu
+		if strings.Contains(screen, "主功能表") || strings.Contains(screen, "【主選單】") {
+			log.Info("Login successful, reached main menu")
+			return nil
+		}
+
+		// Handle duplicate login
+		if strings.Contains(screen, "您想刪除其他重複登入") || strings.Contains(screen, "重複登入") {
+			log.Info("Handling duplicate login, sending 'n'")
+			c.sendLine("n")
 			continue
 		}
 
-		if strings.Contains(string(screen), text) {
-			return nil
+		// Press any key to continue
+		if strings.Contains(screen, "請按任意鍵繼續") || strings.Contains(screen, "按任意鍵") {
+			log.Info("Pressing Enter to continue")
+			c.send("\r")
+			continue
+		}
+
+		// Handle error attempts deletion prompt
+		if strings.Contains(screen, "您要刪除以上錯誤嘗試") {
+			log.Info("Deleting error attempts, sending 'y'")
+			c.sendLine("y")
+			continue
+		}
+
+		// Still logging in
+		if strings.Contains(screen, "登入中") || strings.Contains(screen, "請稍候") {
+			log.Debug("Login in progress...")
+			continue
 		}
 	}
 
-	return ErrTimeout
+	// Check final state
+	screen = c.getScreen()
+	if strings.Contains(screen, "主功能表") || strings.Contains(screen, "【主選單】") {
+		log.Info("Login successful")
+		return nil
+	}
+
+	log.WithField("screen", truncate(screen, 500)).Warn("Login flow completed but main menu not detected")
+	return nil
 }
 
-// SendMail is a convenience function to send mail
-func SendMail(username, password, recipient, subject, content string) error {
-	client := NewPTTClient(username, password)
-	return client.SendMail(recipient, subject, content)
+// sendMailInternal sends mail after login
+func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, content string) error {
+	log.WithField("recipient", recipient).Info("Starting mail send process")
+
+	// Clear screen buffer for fresh reads
+	c.clearScreen()
+
+	// Step 1: Press 'M' for Mail menu
+	log.Info("Pressing 'M' for Mail menu")
+	if err := c.send("M"); err != nil {
+		return fmt.Errorf("failed to send M: %w", err)
+	}
+
+	screen, found := c.waitFor(ctx, 5*time.Second, "郵件選單", "我的信箱", "電子郵件", "站內寄信", "寄發新信")
+	log.WithField("screen_preview", truncate(screen, 300)).Info("Screen after M")
+
+	if !found {
+		// Not in mail section, try again
+		log.Warn("Not in mail section, trying Enter then M")
+		c.send("\r")
+		time.Sleep(200 * time.Millisecond)
+		c.send("M")
+		screen, _ = c.waitFor(ctx, 5*time.Second, "郵件選單", "我的信箱", "電子郵件")
+		log.WithField("screen_preview", truncate(screen, 300)).Info("Screen after retry M")
+	}
+
+	// Step 2: Press 'S' to send mail
+	log.Info("Pressing 'S' for Send mail")
+	if err := c.send("S"); err != nil {
+		return fmt.Errorf("failed to send S: %w", err)
+	}
+
+	screen, found = c.waitFor(ctx, 5*time.Second, "收信人", "收件人", "站內寄信", "請輸入收件人")
+	log.WithField("screen_preview", truncate(screen, 300)).Info("Screen after S")
+
+	if !found {
+		log.WithField("screen", truncate(screen, 500)).Warn("Recipient prompt not found")
+	}
+
+	// Step 3: Enter recipient
+	log.WithField("recipient", recipient).Info("Entering recipient")
+	if err := c.sendLine(recipient); err != nil {
+		return fmt.Errorf("failed to send recipient: %w", err)
+	}
+
+	screen, found = c.waitFor(ctx, 5*time.Second, "標題", "主旨", "主題", "Subject", "無此帳號", "找不到")
+	log.WithField("screen_preview", truncate(screen, 300)).Info("Screen after recipient")
+
+	// Check for user not found
+	if strings.Contains(screen, "無此帳號") || strings.Contains(screen, "找不到") {
+		return ErrUserNotFound
+	}
+
+	// Step 4: Enter subject
+	log.WithField("subject", subject).Info("Entering subject")
+	if err := c.sendLine(subject); err != nil {
+		return fmt.Errorf("failed to send subject: %w", err)
+	}
+
+	// Wait for editor
+	screen, _ = c.waitFor(ctx, 3*time.Second, "編輯", "Ctrl", "內文")
+	log.WithField("screen_preview", truncate(screen, 300)).Info("Screen after subject")
+
+	// Step 5: Enter content (line by line)
+	log.WithField("content_lines", len(strings.Split(content, "\n"))).Info("Entering mail content")
+	// Convert content to CRLF for PTT
+	contentWithCRLF := strings.ReplaceAll(content, "\n", "\r\n")
+	if err := c.send(contentWithCRLF); err != nil {
+		return fmt.Errorf("failed to send content: %w", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	// Step 6: Press Ctrl+X to finish editing
+	log.Info("Sending Ctrl+X to finish editing")
+	if err := c.sendByte(0x18); err != nil {
+		return fmt.Errorf("failed to send Ctrl+X: %w", err)
+	}
+
+	screen, _ = c.waitFor(ctx, 3*time.Second, "檔案處理", "存檔", "儲存", "(S)")
+	log.WithField("screen_preview", truncate(screen, 300)).Info("Screen after Ctrl+X")
+
+	// Step 7: Press 's' to save and send
+	log.Info("Pressing 's' to save")
+	if err := c.sendLine("s"); err != nil {
+		return fmt.Errorf("failed to send s: %w", err)
+	}
+
+	// Wait for signature prompt or draft prompt
+	screen, _ = c.waitFor(ctx, 3*time.Second, "簽名檔", "存底", "底稿", "自存底稿", "signature")
+	log.WithField("screen_preview", truncate(screen, 300)).Info("Screen after save")
+
+	// Handle signature prompt - select "0" for no signature
+	if strings.Contains(screen, "簽名檔") || strings.Contains(screen, "signature") {
+		log.Info("Selecting no signature (0)")
+		if err := c.sendLine("0"); err != nil {
+			return fmt.Errorf("failed to send 0: %w", err)
+		}
+		// Wait for draft prompt
+		screen, _ = c.waitFor(ctx, 3*time.Second, "存底", "底稿", "自存底稿")
+		log.WithField("screen_preview", truncate(screen, 300)).Info("Screen after signature selection")
+	}
+
+	// Step 8: Press 'n' to not save draft
+	log.Info("Pressing 'n' to not save draft")
+	if err := c.sendLine("n"); err != nil {
+		return fmt.Errorf("failed to send n: %w", err)
+	}
+
+	// Wait for completion
+	time.Sleep(500 * time.Millisecond)
+	screen = c.getScreen()
+
+	log.WithFields(log.Fields{
+		"recipient":      recipient,
+		"subject":        subject,
+		"screen_preview": truncate(screen, 300),
+	}).Info("PTT mail send completed")
+
+	// Check for success indicators
+	if strings.Contains(screen, "信件已送出") ||
+		strings.Contains(screen, "順利寄出") ||
+		strings.Contains(screen, "寄出") ||
+		strings.Contains(screen, "成功") {
+		log.Info("PTT mail sent successfully (confirmed)")
+	} else {
+		log.Info("PTT mail send completed (no explicit confirmation)")
+	}
+
+	return nil
 }
 
 // TestLogin tests if the PTT credentials are valid
@@ -659,14 +492,11 @@ func (c *PTTClient) TestLogin() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Connect to PTT
+	// Connect to PTT via SSH
 	if err := c.connect(ctx); err != nil {
 		return fmt.Errorf("connect failed: %w", err)
 	}
 	defer c.close()
-
-	// Read immediately and stop as soon as we see login prompt
-	c.readScreen(ctx, 5*time.Second, "請輸入代號")
 
 	// Login
 	if err := c.login(ctx); err != nil {
@@ -676,8 +506,24 @@ func (c *PTTClient) TestLogin() error {
 	return nil
 }
 
+// SendMail is a convenience function to send mail
+func SendMail(username, password, recipient, subject, content string) error {
+	client := NewPTTClient(username, password)
+	return client.SendMail(recipient, subject, content)
+}
+
 // TestCredentials is a convenience function to test PTT credentials
 func TestCredentials(username, password string) error {
 	client := NewPTTClient(username, password)
 	return client.TestLogin()
+}
+
+// truncate truncates a string to max length
+func truncate(s string, maxLen int) string {
+	// Remove ANSI escape codes for cleaner logging
+	s = strings.ReplaceAll(s, "\x1b", "\\x1b")
+	if len(s) > maxLen {
+		return s[:maxLen] + "..."
+	}
+	return s
 }
