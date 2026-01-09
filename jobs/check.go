@@ -83,14 +83,14 @@ func getMailButtonData(cr Checker) []*telegram.MailButtonData {
 		return nil
 	}
 
-	// Check if this is a web account (format: webaccount_<userID>)
+	// Check if this is a web account (format: web_<userID>)
 	account := cr.Profile.Account
-	if !strings.HasPrefix(account, "webaccount_") {
+	if !strings.HasPrefix(account, accountModel.WebAccountPrefix) {
 		return nil
 	}
 
 	// Parse user ID from account
-	userIDStr := strings.TrimPrefix(account, "webaccount_")
+	userIDStr := strings.TrimPrefix(account, accountModel.WebAccountPrefix)
 	userID, err := strconv.Atoi(userIDStr)
 	if err != nil {
 		return nil
