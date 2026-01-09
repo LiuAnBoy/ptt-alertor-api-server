@@ -97,13 +97,15 @@ func (c *PTTClient) close() {
 
 // login performs PTT login
 func (c *PTTClient) login(ctx context.Context) error {
+	log.Debug("Starting PTT login")
+
 	// Read until we see login prompt
 	if err := c.waitForScreen(ctx, "請輸入代號", 10*time.Second); err != nil {
-		// Try alternative login screen
-		log.Debug("Waiting for login screen...")
+		log.WithField("error", err).Debug("Waiting for login screen...")
 	}
 
 	// Send username
+	log.WithField("username", c.username).Debug("Sending username")
 	if err := c.sendString(c.username + "\r"); err != nil {
 		return err
 	}
@@ -111,10 +113,11 @@ func (c *PTTClient) login(ctx context.Context) error {
 
 	// Wait for password prompt
 	if err := c.waitForScreen(ctx, "請輸入您的密碼", 5*time.Second); err != nil {
-		log.Debug("Waiting for password screen...")
+		log.WithField("error", err).Debug("Waiting for password screen...")
 	}
 
 	// Send password
+	log.Debug("Sending password")
 	if err := c.sendString(c.password + "\r"); err != nil {
 		return err
 	}
@@ -124,6 +127,10 @@ func (c *PTTClient) login(ctx context.Context) error {
 	for i := 0; i < 5; i++ {
 		screen, _ := c.readScreen(ctx, 2*time.Second)
 		screenStr := string(screen)
+		log.WithFields(log.Fields{
+			"iteration": i,
+			"screen":    screenStr,
+		}).Debug("Post-login screen")
 
 		// Check for login failure
 		if strings.Contains(screenStr, "密碼不對") || strings.Contains(screenStr, "錯誤") {
@@ -132,6 +139,7 @@ func (c *PTTClient) login(ctx context.Context) error {
 
 		// Check for duplicate login
 		if strings.Contains(screenStr, "您想刪除其他重複登入") {
+			log.Debug("Handling duplicate login prompt")
 			c.sendString("n\r") // Don't kick other login
 			time.Sleep(500 * time.Millisecond)
 			continue
@@ -140,7 +148,8 @@ func (c *PTTClient) login(ctx context.Context) error {
 		// Press enter/space to continue through various prompts
 		if strings.Contains(screenStr, "請按任意鍵繼續") ||
 			strings.Contains(screenStr, "按任意鍵") ||
-			strings.Contains(screenStr, "您要刪除以上strContains錯誤嘗試") {
+			strings.Contains(screenStr, "您要刪除以上錯誤嘗試") {
+			log.Debug("Pressing space to continue")
 			c.sendString(" ")
 			time.Sleep(500 * time.Millisecond)
 			continue
@@ -153,6 +162,7 @@ func (c *PTTClient) login(ctx context.Context) error {
 		}
 	}
 
+	log.Warn("Login finished but main menu not detected")
 	return nil
 }
 
@@ -161,16 +171,26 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 	log.WithField("recipient", recipient).Debug("Starting mail send process")
 
 	// Go to mail section: press 'M' for Mail
+	log.Debug("Pressing 'M' for Mail menu")
 	if err := c.sendString("M"); err != nil {
 		return err
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1 * time.Second)
+
+	// Read screen after pressing M
+	screen, _ := c.readScreen(ctx, 2*time.Second)
+	log.WithField("screen", string(screen)).Debug("Screen after pressing M")
 
 	// Press 'S' for Send mail
+	log.Debug("Pressing 'S' for Send mail")
 	if err := c.sendString("S"); err != nil {
 		return err
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1 * time.Second)
+
+	// Read screen after pressing S
+	screen, _ = c.readScreen(ctx, 2*time.Second)
+	log.WithField("screen", string(screen)).Debug("Screen after pressing S")
 
 	// Wait for recipient prompt
 	if err := c.waitForScreen(ctx, "收信人", 3*time.Second); err != nil {
@@ -184,7 +204,7 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 	time.Sleep(1 * time.Second)
 
 	// Check if user exists
-	screen, _ := c.readScreen(ctx, 2*time.Second)
+	screen, _ = c.readScreen(ctx, 2*time.Second)
 	screenStr := string(screen)
 	log.WithField("screen", screenStr).Debug("Screen after entering recipient")
 
