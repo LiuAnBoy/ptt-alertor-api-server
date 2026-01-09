@@ -57,9 +57,9 @@ func (c *PTTClient) SendMail(recipient, subject, content string) error {
 	defer c.close()
 	log.Info("PTT WebSocket connected")
 
-	// Read immediately - PTT sends Telnet commands right after connect
-	// Must respond to them quickly or connection will be closed
-	initialScreen, _ := c.readScreen(ctx, 5*time.Second)
+	// Read immediately and stop as soon as we see login prompt
+	// This prevents the connection from being closed by PTT due to inactivity
+	initialScreen, _ := c.readScreen(ctx, 5*time.Second, "請輸入代號")
 	log.WithField("screen", string(initialScreen)).Info("Initial screen after connect")
 
 	// Login
@@ -198,21 +198,16 @@ func (c *PTTClient) close() {
 func (c *PTTClient) login(ctx context.Context) error {
 	log.Info("Starting PTT login")
 
-	// Read until we see login prompt
-	if err := c.waitForScreen(ctx, "請輸入代號", 10*time.Second); err != nil {
-		log.WithField("error", err).Info("Waiting for login screen...")
-	}
-
-	// Send username
+	// Send username immediately (we already saw the login prompt)
 	log.WithField("username", c.username).Info("Sending username")
 	if err := c.sendString(c.username + "\r"); err != nil {
 		return err
 	}
-	time.Sleep(500 * time.Millisecond)
 
 	// Wait for password prompt
-	if err := c.waitForScreen(ctx, "請輸入您的密碼", 5*time.Second); err != nil {
-		log.WithField("error", err).Info("Waiting for password screen...")
+	screen, _ := c.readScreen(ctx, 3*time.Second, "請輸入您的密碼")
+	if !strings.Contains(string(screen), "請輸入您的密碼") {
+		log.WithField("screen", string(screen)).Info("Did not see password prompt")
 	}
 
 	// Send password
@@ -220,12 +215,16 @@ func (c *PTTClient) login(ctx context.Context) error {
 	if err := c.sendString(c.password + "\r"); err != nil {
 		return err
 	}
-	time.Sleep(1 * time.Second)
 
 	// Handle post-login screens (press any key, etc.)
-	for i := 0; i < 5; i++ {
+	for i := range 10 {
 		screen, _ := c.readScreen(ctx, 2*time.Second)
 		screenStr := string(screen)
+
+		if screenStr == "" {
+			continue
+		}
+
 		log.WithFields(log.Fields{
 			"iteration": i,
 			"screen":    screenStr,
@@ -240,7 +239,6 @@ func (c *PTTClient) login(ctx context.Context) error {
 		if strings.Contains(screenStr, "您想刪除其他重複登入") {
 			log.Info("Handling duplicate login prompt")
 			c.sendString("n\r") // Don't kick other login
-			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 
@@ -250,7 +248,6 @@ func (c *PTTClient) login(ctx context.Context) error {
 			strings.Contains(screenStr, "您要刪除以上錯誤嘗試") {
 			log.Info("Pressing space to continue")
 			c.sendString(" ")
-			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 
@@ -405,7 +402,8 @@ func (c *PTTClient) sendByte(b byte) error {
 }
 
 // readScreen reads screen data from PTT
-func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration) ([]byte, error) {
+// stopText: if non-empty, stop reading when this text is found (allows early return)
+func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration, stopText ...string) ([]byte, error) {
 	if c.conn == nil {
 		return nil, errors.New("connection is nil")
 	}
@@ -418,6 +416,7 @@ func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration) ([]byte
 	readCount := 0
 	errorCount := 0
 	var lastError error
+	stopReading := false
 
 	// Read in a separate function to catch panic
 	func() {
@@ -432,7 +431,7 @@ func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration) ([]byte
 			}
 		}()
 
-		for time.Now().Before(deadline) {
+		for time.Now().Before(deadline) && !stopReading {
 			// Set deadline for each read operation
 			c.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 
@@ -444,6 +443,10 @@ func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration) ([]byte
 
 				// Timeout is expected, continue trying
 				if strings.Contains(errStr, "i/o timeout") {
+					// If we already have data and got timeout, we can stop
+					if len(screenData) > 0 {
+						return
+					}
 					if time.Now().Before(deadline) {
 						continue
 					}
@@ -479,6 +482,20 @@ func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration) ([]byte
 			c.handleTelnetNegotiation(data)
 
 			screenData = append(screenData, data...)
+
+			// Check if we should stop reading (found stop text)
+			if len(stopText) > 0 && stopText[0] != "" {
+				// Decode current data to check for stop text
+				decoder := traditionalchinese.Big5.NewDecoder()
+				utf8Bytes, _, _ := transform.Bytes(decoder, screenData)
+				for _, st := range stopText {
+					if strings.Contains(string(utf8Bytes), st) {
+						log.WithField("stopText", st).Info("Found stop text, stopping read")
+						stopReading = true
+						break
+					}
+				}
+			}
 		}
 	}()
 
@@ -556,8 +573,8 @@ func (c *PTTClient) TestLogin() error {
 	}
 	defer c.close()
 
-	// Read immediately - PTT sends Telnet commands right after connect
-	c.readScreen(ctx, 3*time.Second)
+	// Read immediately and stop as soon as we see login prompt
+	c.readScreen(ctx, 5*time.Second, "請輸入代號")
 
 	// Login
 	if err := c.login(ctx); err != nil {
