@@ -428,44 +428,51 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 	// Clear screen buffer for fresh reads
 	c.clearScreen()
 
-	// Step 1: Press 'M' for Mail menu
-	log.Info("Pressing 'M' for Mail menu")
+	// Step 1: Press 'M' then Enter to enter Mail menu
+	log.Info("Pressing 'M' + Enter for Mail menu")
 	if err := c.send("M"); err != nil {
 		return fmt.Errorf("failed to send M: %w", err)
 	}
-
-	screen, found := c.waitFor(ctx, 5*time.Second, "郵件選單", "我的信箱", "電子郵件", "站內寄信", "寄發新信", "Mail")
-	stripped := stripANSI(screen)
-	log.WithField("stripped_screen", truncate(stripped, 300)).Info("Screen after M")
-
-	if !found {
-		// Not in mail section, try again
-		log.Warn("Not in mail section, trying Enter then M")
-		c.clearScreen()
-		c.send("\r")
-		time.Sleep(300 * time.Millisecond)
-		c.send("M")
-		screen, _ = c.waitFor(ctx, 5*time.Second, "郵件選單", "我的信箱", "電子郵件", "Mail")
-		stripped = stripANSI(screen)
-		log.WithField("stripped_screen", truncate(stripped, 300)).Info("Screen after retry M")
+	time.Sleep(200 * time.Millisecond)
+	if err := c.send("\r"); err != nil {
+		return fmt.Errorf("failed to send Enter after M: %w", err)
 	}
 
-	// Step 2: Press 'S' to send mail
+	screen, found := c.waitFor(ctx, 5*time.Second, "郵件選單", "我的信箱", "電子郵件", "站內寄信", "寄發新信")
+	stripped := stripANSI(screen)
+	log.WithField("stripped_screen", truncate(stripped, 300)).Info("Screen after M+Enter")
+
+	if !found {
+		log.Warn("Mail menu not found, retrying...")
+		c.clearScreen()
+		c.send("M")
+		time.Sleep(200 * time.Millisecond)
+		c.send("\r")
+		screen, _ = c.waitFor(ctx, 5*time.Second, "郵件選單", "我的信箱", "電子郵件")
+		stripped = stripANSI(screen)
+		log.WithField("stripped_screen", truncate(stripped, 300)).Info("Screen after retry M+Enter")
+	}
+
+	// Step 2: Press 'S' then Enter to start sending mail
 	c.clearScreen()
-	log.Info("Pressing 'S' for Send mail")
+	log.Info("Pressing 'S' + Enter for Send mail")
 	if err := c.send("S"); err != nil {
 		return fmt.Errorf("failed to send S: %w", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if err := c.send("\r"); err != nil {
+		return fmt.Errorf("failed to send Enter after S: %w", err)
 	}
 
 	screen, found = c.waitFor(ctx, 5*time.Second, "收信人", "收件人", "站內寄信", "請輸入收件人")
 	stripped = stripANSI(screen)
-	log.WithField("stripped_screen", truncate(stripped, 300)).Info("Screen after S")
+	log.WithField("stripped_screen", truncate(stripped, 300)).Info("Screen after S+Enter")
 
 	if !found {
 		log.Warn("Recipient prompt not found")
 	}
 
-	// Step 3: Enter recipient
+	// Step 3: Enter recipient + Enter
 	c.clearScreen()
 	log.WithField("recipient", recipient).Info("Entering recipient")
 	if err := c.sendLine(recipient); err != nil {
@@ -481,7 +488,7 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 		return ErrUserNotFound
 	}
 
-	// Step 4: Enter subject
+	// Step 4: Enter subject + Enter
 	c.clearScreen()
 	log.WithField("subject", subject).Info("Entering subject")
 	if err := c.sendLine(subject); err != nil {
@@ -496,9 +503,8 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 	// Step 5: Enter content
 	c.clearScreen()
 	log.WithField("content_lines", len(strings.Split(content, "\n"))).Info("Entering mail content")
-	// Convert content to CRLF for PTT
-	contentWithCRLF := strings.ReplaceAll(content, "\n", "\r\n")
-	if err := c.send(contentWithCRLF); err != nil {
+	// Send content directly (no need to convert newlines, just send as-is)
+	if err := c.send(content); err != nil {
 		return fmt.Errorf("failed to send content: %w", err)
 	}
 	time.Sleep(500 * time.Millisecond)
@@ -513,34 +519,33 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 	stripped = stripANSI(screen)
 	log.WithField("stripped_screen", truncate(stripped, 200)).Info("Screen after Ctrl+X")
 
-	// Step 7: Press 's' to save and send
+	// Step 7: Press Enter to save/send
 	c.clearScreen()
-	log.Info("Pressing 's' to save")
-	if err := c.sendLine("s"); err != nil {
-		return fmt.Errorf("failed to send s: %w", err)
+	log.Info("Pressing Enter to save")
+	if err := c.send("\r"); err != nil {
+		return fmt.Errorf("failed to send Enter: %w", err)
 	}
 
-	// Wait for signature prompt or draft prompt
-	screen, _ = c.waitFor(ctx, 3*time.Second, "簽名檔", "存底", "底稿", "自存底稿", "signature")
+	// Wait for signature prompt
+	screen, _ = c.waitFor(ctx, 3*time.Second, "簽名檔", "選擇簽名檔")
 	stripped = stripANSI(screen)
-	log.WithField("stripped_screen", truncate(stripped, 200)).Info("Screen after save")
+	log.WithField("stripped_screen", truncate(stripped, 200)).Info("Screen after Enter (signature prompt)")
 
-	// Handle signature prompt - select "0" for no signature
-	if strings.Contains(stripped, "簽名檔") || strings.Contains(stripped, "signature") {
-		log.Info("Selecting no signature (0)")
-		c.clearScreen()
-		if err := c.sendLine("0"); err != nil {
-			return fmt.Errorf("failed to send 0: %w", err)
-		}
-		// Wait for draft prompt
-		screen, _ = c.waitFor(ctx, 3*time.Second, "存底", "底稿", "自存底稿")
-		stripped = stripANSI(screen)
-		log.WithField("stripped_screen", truncate(stripped, 200)).Info("Screen after signature selection")
+	// Step 8: Select '0' for no signature
+	c.clearScreen()
+	log.Info("Selecting no signature (0)")
+	if err := c.send("0"); err != nil {
+		return fmt.Errorf("failed to send 0: %w", err)
 	}
 
-	// Step 8: Press 'n' to not save draft
+	// Wait for draft prompt
+	screen, _ = c.waitFor(ctx, 3*time.Second, "存底", "底稿", "自存底稿", "是否")
+	stripped = stripANSI(screen)
+	log.WithField("stripped_screen", truncate(stripped, 200)).Info("Screen after signature selection")
+
+	// Step 9: Press 'n' + Enter to not save draft
 	c.clearScreen()
-	log.Info("Pressing 'n' to not save draft")
+	log.Info("Pressing 'n' + Enter to not save draft")
 	if err := c.sendLine("n"); err != nil {
 		return fmt.Errorf("failed to send n: %w", err)
 	}
