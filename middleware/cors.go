@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 )
 
 // CORS handles Cross-Origin Resource Sharing
@@ -41,10 +43,17 @@ func isOriginAllowed(origin string) bool {
 		return true
 	}
 
-	// Allow DASHBOARD_URL
-	dashboardURL := os.Getenv("DASHBOARD_URL")
-	if dashboardURL != "" && origin == dashboardURL {
-		return true
+	// Allow origins matching ALLOWED_DOMAIN suffix (e.g., "luan.com.tw")
+	allowedDomain := os.Getenv("ALLOWED_DOMAIN")
+	if allowedDomain != "" {
+		parsed, err := url.Parse(origin)
+		if err == nil {
+			host := parsed.Hostname()
+			// Match exact domain or subdomain
+			if host == allowedDomain || strings.HasSuffix(host, "."+allowedDomain) {
+				return true
+			}
+		}
 	}
 
 	return false

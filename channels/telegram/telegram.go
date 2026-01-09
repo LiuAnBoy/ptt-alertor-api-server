@@ -189,11 +189,11 @@ func sendWebAppBindButton(chatID int64) {
 	}
 
 	// Build Web App URL
-	dashboardURL := os.Getenv("DASHBOARD_URL")
-	if dashboardURL == "" {
-		dashboardURL = "http://localhost:3000"
+	webappURL := os.Getenv("WEBAPP_URL")
+	if webappURL == "" {
+		webappURL = "http://localhost:3000"
 	}
-	webAppURL := dashboardURL + "/telegram/bind?token=" + token
+	webAppURL := webappURL + "/telegram/bind?token=" + token
 
 	// Send message with URL button (opens in browser)
 	msg := tgbotapi.NewMessage(chatID, "點擊下方按鈕登入並綁定帳號")
