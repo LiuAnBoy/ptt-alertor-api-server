@@ -100,16 +100,69 @@ func (p *Postgres) FindByID(id int) (*Account, error) {
 	return &account, nil
 }
 
-// List returns all users (for admin)
-func (p *Postgres) List() ([]*Account, error) {
+// ListResult represents paginated list result
+type ListResult struct {
+	Users []*Account `json:"users"`
+	Total int        `json:"total"`
+	Page  int        `json:"page"`
+	Limit int        `json:"limit"`
+}
+
+// List returns users with pagination and search (for admin)
+func (p *Postgres) List(query string, page, limit int) (*ListResult, error) {
 	ctx := context.Background()
 	pool := connections.Postgres()
 
-	rows, err := pool.Query(ctx, `
-		SELECT id, email, role, enabled, created_at, updated_at
-		FROM users
-		ORDER BY created_at DESC
-	`)
+	// Default values
+	if page <= 0 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	offset := (page - 1) * limit
+
+	var total int
+	var rows pgx.Rows
+	var err error
+
+	if query != "" {
+		// Search by email (case-insensitive)
+		searchPattern := "%" + query + "%"
+
+		// Get total count
+		err = pool.QueryRow(ctx, `
+			SELECT COUNT(*) FROM users WHERE email ILIKE $1
+		`, searchPattern).Scan(&total)
+		if err != nil {
+			return nil, err
+		}
+
+		// Get paginated results
+		rows, err = pool.Query(ctx, `
+			SELECT id, email, role, enabled, created_at, updated_at
+			FROM users
+			WHERE email ILIKE $1
+			ORDER BY created_at DESC
+			LIMIT $2 OFFSET $3
+		`, searchPattern, limit, offset)
+	} else {
+		// Get total count
+		err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&total)
+		if err != nil {
+			return nil, err
+		}
+
+		// Get paginated results
+		rows, err = pool.Query(ctx, `
+			SELECT id, email, role, enabled, created_at, updated_at
+			FROM users
+			ORDER BY created_at DESC
+			LIMIT $1 OFFSET $2
+		`, limit, offset)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +185,16 @@ func (p *Postgres) List() ([]*Account, error) {
 		users = append(users, &account)
 	}
 
-	return users, nil
+	if users == nil {
+		users = []*Account{}
+	}
+
+	return &ListResult{
+		Users: users,
+		Total: total,
+		Page:  page,
+		Limit: limit,
+	}, nil
 }
 
 // Update updates an account

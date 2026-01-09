@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/Ptt-Alertor/ptt-alertor/auth"
 	"github.com/Ptt-Alertor/ptt-alertor/jobs"
 	"github.com/Ptt-Alertor/ptt-alertor/models/account"
+	"github.com/Ptt-Alertor/ptt-alertor/models/stats"
 	"github.com/julienschmidt/httprouter"
 )
 
@@ -16,19 +18,36 @@ type UpdateUserRequest struct {
 	Enabled bool   `json:"enabled"`
 }
 
-// AdminListUsers returns all users (admin only)
+// AdminListUsers returns users with pagination and search (admin only)
 func AdminListUsers(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	accounts, err := accountRepo.List()
+	q := r.URL.Query()
+
+	// Get search query
+	search := q.Get("q")
+
+	// Get pagination params (default: page=1, limit=20)
+	page := 1
+	limit := 20
+
+	if p := q.Get("page"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+
+	if l := q.Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	result, err := accountRepo.List(search, page, limit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "取得用戶列表失敗"})
 		return
 	}
 
-	if accounts == nil {
-		accounts = []*account.Account{}
-	}
-
-	writeJSON(w, http.StatusOK, accounts)
+	writeJSON(w, http.StatusOK, result)
 }
 
 // AdminGetUser returns a single user (admin only)
@@ -147,4 +166,62 @@ func AdminBroadcast(w http.ResponseWriter, r *http.Request, _ httprouter.Params)
 	}
 
 	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "廣播已發送"})
+}
+
+// AdminLogin handles admin login (requires admin role)
+func AdminLogin(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的請求內容"})
+		return
+	}
+
+	// Find account
+	acc, err := accountRepo.FindByEmail(req.Email)
+	if err != nil {
+		if err == account.ErrAccountNotFound {
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "電子郵件或密碼錯誤"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "查詢帳號失敗"})
+		return
+	}
+
+	// Check if account is enabled
+	if !acc.Enabled {
+		writeJSON(w, http.StatusForbidden, ErrorResponse{Success: false, Message: "帳號已停用"})
+		return
+	}
+
+	// Check if account is admin
+	if acc.Role != "admin" {
+		writeJSON(w, http.StatusForbidden, ErrorResponse{Success: false, Message: "權限不足"})
+		return
+	}
+
+	// Check password
+	if !auth.CheckPassword(req.Password, acc.Password) {
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "電子郵件或密碼錯誤"})
+		return
+	}
+
+	// Generate token
+	token, err := auth.GenerateToken(acc.ID, acc.Email, acc.Role)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "產生令牌失敗"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, TokenResponse{Token: token})
+}
+
+// AdminInit returns admin dashboard statistics
+func AdminInit(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	response, err := stats.GetAdminStats()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "取得統計資料失敗"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, response)
 }
