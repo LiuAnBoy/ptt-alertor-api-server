@@ -57,9 +57,9 @@ func (c *PTTClient) SendMail(recipient, subject, content string) error {
 	defer c.close()
 	log.Info("PTT WebSocket connected")
 
-	// Wait for initial screen and read it
-	time.Sleep(2 * time.Second)
-	initialScreen, _ := c.readScreen(ctx, 3*time.Second)
+	// Read immediately - PTT sends Telnet commands right after connect
+	// Must respond to them quickly or connection will be closed
+	initialScreen, _ := c.readScreen(ctx, 5*time.Second)
 	log.WithField("screen", string(initialScreen)).Info("Initial screen after connect")
 
 	// Login
@@ -109,45 +109,67 @@ const (
 
 // handleTelnetNegotiation processes and responds to Telnet commands in the data
 func (c *PTTClient) handleTelnetNegotiation(data []byte) {
+	if len(data) < 3 {
+		return
+	}
+
 	i := 0
-	for i < len(data)-2 {
+	for i <= len(data)-3 {
 		if data[i] == IAC {
 			cmd := data[i+1]
 			opt := data[i+2]
 
 			switch cmd {
 			case DO:
-				// Respond with WILL for terminal type, WONT for others
-				if opt == TERMINAL_TYPE {
-					c.sendBytes([]byte{IAC, WILL, opt})
-				} else if opt == NAWS {
-					// Send window size: 80x24
+				log.WithFields(log.Fields{"cmd": "DO", "opt": opt}).Debug("Telnet negotiation")
+				switch opt {
+				case TERMINAL_TYPE:
+					c.sendBytes([]byte{IAC, WILL, TERMINAL_TYPE})
+				case NAWS:
+					// Send WILL NAWS and then window size: 80x24
 					c.sendBytes([]byte{IAC, WILL, NAWS})
 					c.sendBytes([]byte{IAC, SB, NAWS, 0, 80, 0, 24, IAC, SE})
-				} else {
-					c.sendBytes([]byte{IAC, WONT, opt})
+				default:
+					// Accept other options
+					c.sendBytes([]byte{IAC, WILL, opt})
 				}
 				i += 3
 			case WILL:
+				log.WithFields(log.Fields{"cmd": "WILL", "opt": opt}).Debug("Telnet negotiation")
 				c.sendBytes([]byte{IAC, DO, opt})
+				i += 3
+			case WONT:
+				log.WithFields(log.Fields{"cmd": "WONT", "opt": opt}).Debug("Telnet negotiation")
+				c.sendBytes([]byte{IAC, DONT, opt})
+				i += 3
+			case DONT:
+				log.WithFields(log.Fields{"cmd": "DONT", "opt": opt}).Debug("Telnet negotiation")
+				c.sendBytes([]byte{IAC, WONT, opt})
 				i += 3
 			case SB:
 				// Sub-negotiation - find SE
-				for j := i + 2; j < len(data)-1; j++ {
+				seFound := false
+				for j := i + 3; j <= len(data)-2; j++ {
 					if data[j] == IAC && data[j+1] == SE {
-						// Terminal type request
-						if opt == TERMINAL_TYPE && j > i+3 && data[i+3] == 1 {
-							// Send terminal type response: VT100
+						// Terminal type request (SB TERMINAL_TYPE 1 ... IAC SE)
+						if opt == TERMINAL_TYPE && i+3 < len(data) && data[i+3] == 1 {
+							log.Info("Telnet: Sending terminal type VT100")
 							response := []byte{IAC, SB, TERMINAL_TYPE, 0}
 							response = append(response, []byte("VT100")...)
 							response = append(response, IAC, SE)
 							c.sendBytes(response)
 						}
 						i = j + 2
+						seFound = true
 						break
 					}
 				}
+				if !seFound {
+					// SE not found, skip this IAC
+					i++
+				}
 			default:
+				// Unknown command or escape sequence, skip
 				i++
 			}
 		} else {
@@ -383,7 +405,7 @@ func (c *PTTClient) sendByte(b byte) error {
 }
 
 // readScreen reads screen data from PTT
-func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) ([]byte, error) {
+func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration) ([]byte, error) {
 	if c.conn == nil {
 		return nil, errors.New("connection is nil")
 	}
@@ -418,22 +440,34 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) ([]by
 			if readErr != nil {
 				errorCount++
 				lastError = readErr
-				// Check if it's a fatal error (not just timeout)
 				errStr := readErr.Error()
-				if strings.Contains(errStr, "use of closed") ||
-					strings.Contains(errStr, "connection reset") ||
-					strings.Contains(errStr, "broken pipe") {
-					log.WithError(readErr).Warn("WebSocket connection error, stopping read")
+
+				// Timeout is expected, continue trying
+				if strings.Contains(errStr, "i/o timeout") {
+					if time.Now().Before(deadline) {
+						continue
+					}
 					return
 				}
-				// Timeout is expected, continue trying until deadline
+
+				// Fatal errors
+				if strings.Contains(errStr, "use of closed") ||
+					strings.Contains(errStr, "connection reset") ||
+					strings.Contains(errStr, "broken pipe") ||
+					strings.Contains(errStr, "websocket") {
+					log.WithError(readErr).Warn("WebSocket connection error, stopping read")
+					c.connFailed = true
+					return
+				}
+
+				// Other errors - continue trying until deadline
 				if time.Now().Before(deadline) {
 					continue
 				}
 				return
 			}
 			readCount++
-			if readCount <= 3 { // Only log first 3 to avoid spam
+			if readCount <= 5 {
 				log.WithFields(log.Fields{
 					"msgType":  msgType,
 					"dataLen":  len(data),
@@ -522,8 +556,8 @@ func (c *PTTClient) TestLogin() error {
 	}
 	defer c.close()
 
-	// Wait for initial screen
-	time.Sleep(1 * time.Second)
+	// Read immediately - PTT sends Telnet commands right after connect
+	c.readScreen(ctx, 3*time.Second)
 
 	// Login
 	if err := c.login(ctx); err != nil {
