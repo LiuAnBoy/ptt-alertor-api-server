@@ -45,14 +45,13 @@ func BindPTTAccount(w http.ResponseWriter, r *http.Request, _ httprouter.Params)
 	}
 
 	// Test PTT login
-	client := mail.NewPTTClient(req.Username, req.Password)
-	if err := client.SendMail("", "", ""); err != nil {
-		// We expect this to fail since we're not actually sending mail
-		// But if it's a login error, we should report it
+	if err := mail.TestCredentials(req.Username, req.Password); err != nil {
 		if err == mail.ErrLoginFailed {
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "PTT 帳號或密碼錯誤"})
 			return
 		}
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "PTT 連線失敗，請稍後再試"})
+		return
 	}
 
 	// Check if already bound

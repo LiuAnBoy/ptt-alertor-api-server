@@ -233,6 +233,10 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 
 // sendString sends a string to PTT (converts to Big5)
 func (c *PTTClient) sendString(s string) error {
+	if c.conn == nil {
+		return errors.New("connection is nil")
+	}
+
 	// Convert UTF-8 to Big5
 	encoder := traditionalchinese.Big5.NewEncoder()
 	big5Bytes, _, err := transform.Bytes(encoder, []byte(s))
@@ -247,12 +251,19 @@ func (c *PTTClient) sendString(s string) error {
 
 // sendByte sends a single byte (for control characters)
 func (c *PTTClient) sendByte(b byte) error {
+	if c.conn == nil {
+		return errors.New("connection is nil")
+	}
 	c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	return c.conn.WriteMessage(websocket.BinaryMessage, []byte{b})
 }
 
 // readScreen reads screen data from PTT
 func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) ([]byte, error) {
+	if c.conn == nil {
+		return nil, errors.New("connection is nil")
+	}
+
 	c.conn.SetReadDeadline(time.Now().Add(timeout))
 
 	var screenData []byte
@@ -261,10 +272,7 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) ([]by
 	for time.Now().Before(deadline) {
 		_, data, err := c.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				break
-			}
-			// Timeout is expected, not an error
+			// Any error means we should stop reading
 			break
 		}
 		screenData = append(screenData, data...)
@@ -308,4 +316,32 @@ func (c *PTTClient) waitForScreen(ctx context.Context, text string, timeout time
 func SendMail(username, password, recipient, subject, content string) error {
 	client := NewPTTClient(username, password)
 	return client.SendMail(recipient, subject, content)
+}
+
+// TestLogin tests if the PTT credentials are valid
+func (c *PTTClient) TestLogin() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Connect to PTT
+	if err := c.connect(ctx); err != nil {
+		return fmt.Errorf("connect failed: %w", err)
+	}
+	defer c.close()
+
+	// Wait for initial screen
+	time.Sleep(1 * time.Second)
+
+	// Login
+	if err := c.login(ctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// TestCredentials is a convenience function to test PTT credentials
+func TestCredentials(username, password string) error {
+	client := NewPTTClient(username, password)
+	return client.TestLogin()
 }
