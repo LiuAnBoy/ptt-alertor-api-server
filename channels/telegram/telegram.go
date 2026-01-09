@@ -91,13 +91,13 @@ func handleCallbackQuery(update tgbotapi.Update) {
 	switch {
 	case data == "CANCEL":
 		responseText = "取消"
-	case data == "mail_cancel":
+	case data == "m_x":
 		responseText = "已取消寄信"
-	case strings.HasPrefix(data, "mail_preview:"):
+	case strings.HasPrefix(data, "m_p:"):
 		// Show mail preview with confirm/cancel buttons
 		handleMailPreview(data, chatID)
 		return
-	case strings.HasPrefix(data, "mail_confirm:"):
+	case strings.HasPrefix(data, "m_c:"):
 		// Send "processing" message first for mail (takes time)
 		SendTextMessage(chatID, "⏳ 正在寄送信件...")
 		responseText = handleMailConfirm(data, chatID)
@@ -344,8 +344,8 @@ func sendTextMessageWithMailButton(chatID int64, text string, mailDataList []*Ma
 
 	for i := 0; i < maxButtons; i++ {
 		mailData := mailDataList[i]
-		// Create callback data: mail_preview:<userID>:<subID>:<author>
-		callbackData := "mail_preview:" + strconv.Itoa(mailData.UserID) + ":" +
+		// Create callback data: m_p:<userID>:<subID>:<author>
+		callbackData := "m_p:" + strconv.Itoa(mailData.UserID) + ":" +
 			strconv.Itoa(mailData.SubscriptionID) + ":" + mailData.ArticleAuthor
 
 		// Check if callback data is within Telegram's limit (64 bytes)
@@ -380,7 +380,7 @@ func sendTextMessageWithMailButton(chatID int64, text string, mailDataList []*Ma
 
 // handleMailPreview shows mail preview with confirm/cancel buttons
 func handleMailPreview(callbackData string, chatID int64) {
-	// Parse callback data: mail_preview:<userID>:<subID>:<author>
+	// Parse callback data: m_p:<userID>:<subID>:<author>
 	parts := strings.Split(callbackData, ":")
 	if len(parts) != 4 {
 		SendTextMessage(chatID, "無效的請求")
@@ -433,8 +433,8 @@ func handleMailPreview(callbackData string, chatID int64) {
 	previewText += "─────────────\n"
 	previewText += sub.Mail.Content
 
-	// Create confirm callback data: mail_confirm:<userID>:<subID>:<author>
-	confirmData := "mail_confirm:" + strconv.Itoa(userID) + ":" +
+	// Create confirm callback data: m_c:<userID>:<subID>:<author>
+	confirmData := "m_c:" + strconv.Itoa(userID) + ":" +
 		strconv.Itoa(subID) + ":" + recipient
 
 	// Send preview with confirm/cancel buttons
@@ -442,7 +442,7 @@ func handleMailPreview(callbackData string, chatID int64) {
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("✅ 寄信", confirmData),
-			tgbotapi.NewInlineKeyboardButtonData("❌ 取消", "mail_cancel"),
+			tgbotapi.NewInlineKeyboardButtonData("❌ 取消", "m_x"),
 		),
 	)
 
@@ -454,7 +454,7 @@ func handleMailPreview(callbackData string, chatID int64) {
 
 // handleMailConfirm handles the mail confirm button callback
 func handleMailConfirm(callbackData string, chatID int64) string {
-	// Parse callback data: mail_confirm:<userID>:<subID>:<author>
+	// Parse callback data: m_c:<userID>:<subID>:<author>
 	parts := strings.Split(callbackData, ":")
 	if len(parts) != 4 {
 		return "無效的請求"
