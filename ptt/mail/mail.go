@@ -314,6 +314,7 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) (resu
 	// Recover from panic (gorilla/websocket panics on failed connection read)
 	defer func() {
 		if r := recover(); r != nil {
+			log.WithField("panic", r).Error("readScreen panic recovered")
 			err = fmt.Errorf("websocket panic: %v", r)
 			result = nil
 		}
@@ -350,19 +351,27 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) (resu
 		screenData = append(screenData, data...)
 	}
 
+	log.Info("readScreen for loop exited")
+
 	log.WithFields(log.Fields{
-		"readCount":   readCount,
-		"errorCount":  errorCount,
-		"totalBytes":  len(screenData),
+		"readCount":  readCount,
+		"errorCount": errorCount,
+		"totalBytes": len(screenData),
 	}).Info("readScreen finished")
+
+	if len(screenData) == 0 {
+		return nil, nil
+	}
 
 	// Convert Big5 to UTF-8
 	decoder := traditionalchinese.Big5.NewDecoder()
 	utf8Bytes, _, decodeErr := transform.Bytes(decoder, screenData)
 	if decodeErr != nil {
+		log.WithError(decodeErr).Warn("Big5 decode failed, returning raw data")
 		return screenData, nil
 	}
 
+	log.WithField("utf8Len", len(utf8Bytes)).Info("Big5 decode success")
 	return utf8Bytes, nil
 }
 
