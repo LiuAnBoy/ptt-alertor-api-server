@@ -93,6 +93,78 @@ func (c *PTTClient) connect(ctx context.Context) error {
 	return nil
 }
 
+// Telnet protocol constants
+const (
+	IAC  = 255 // Interpret As Command
+	DONT = 254
+	DO   = 253
+	WONT = 252
+	WILL = 251
+	SB   = 250 // Sub-negotiation Begin
+	SE   = 240 // Sub-negotiation End
+
+	TERMINAL_TYPE = 24
+	NAWS          = 31 // Negotiate About Window Size
+)
+
+// handleTelnetNegotiation processes and responds to Telnet commands in the data
+func (c *PTTClient) handleTelnetNegotiation(data []byte) {
+	i := 0
+	for i < len(data)-2 {
+		if data[i] == IAC {
+			cmd := data[i+1]
+			opt := data[i+2]
+
+			switch cmd {
+			case DO:
+				// Respond with WILL for terminal type, WONT for others
+				if opt == TERMINAL_TYPE {
+					c.sendBytes([]byte{IAC, WILL, opt})
+				} else if opt == NAWS {
+					// Send window size: 80x24
+					c.sendBytes([]byte{IAC, WILL, NAWS})
+					c.sendBytes([]byte{IAC, SB, NAWS, 0, 80, 0, 24, IAC, SE})
+				} else {
+					c.sendBytes([]byte{IAC, WONT, opt})
+				}
+				i += 3
+			case WILL:
+				c.sendBytes([]byte{IAC, DO, opt})
+				i += 3
+			case SB:
+				// Sub-negotiation - find SE
+				for j := i + 2; j < len(data)-1; j++ {
+					if data[j] == IAC && data[j+1] == SE {
+						// Terminal type request
+						if opt == TERMINAL_TYPE && j > i+3 && data[i+3] == 1 {
+							// Send terminal type response: VT100
+							response := []byte{IAC, SB, TERMINAL_TYPE, 0}
+							response = append(response, []byte("VT100")...)
+							response = append(response, IAC, SE)
+							c.sendBytes(response)
+						}
+						i = j + 2
+						break
+					}
+				}
+			default:
+				i++
+			}
+		} else {
+			i++
+		}
+	}
+}
+
+// sendBytes sends raw bytes without encoding
+func (c *PTTClient) sendBytes(data []byte) error {
+	if c.conn == nil {
+		return errors.New("connection is nil")
+	}
+	c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	return c.conn.WriteMessage(websocket.BinaryMessage, data)
+}
+
 // close closes the WebSocket connection
 func (c *PTTClient) close() {
 	if c.conn != nil {
@@ -368,6 +440,10 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) ([]by
 					"rawBytes": fmt.Sprintf("%v", data[:min(50, len(data))]),
 				}).Info("ReadMessage received data")
 			}
+
+			// Handle Telnet negotiation commands in the data
+			c.handleTelnetNegotiation(data)
+
 			screenData = append(screenData, data...)
 		}
 	}()
