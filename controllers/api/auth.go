@@ -168,12 +168,17 @@ func Me(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	bindings, _ := bindingRepo.FindAllByUser(acc.ID)
 	bindingStatus := map[string]bool{
 		binding.ServiceTelegram: false,
+		"ptt":                   false,
 	}
 	for _, b := range bindings {
 		if b.ServiceID != "" && b.Enabled {
 			bindingStatus[b.Service] = true
 		}
 	}
+
+	// Check PTT account binding
+	pttExists, _ := pttAccountRepo.Exists(acc.ID)
+	bindingStatus["ptt"] = pttExists
 
 	response := MeResponse{
 		ID:        acc.ID,

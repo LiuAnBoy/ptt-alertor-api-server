@@ -14,38 +14,8 @@ var pttAccountRepo = &account.PTTAccountPostgres{}
 
 // PTTAccountRequest represents a request to bind PTT account
 type PTTAccountRequest struct {
-	PTTUsername string `json:"ptt_username"`
-	PTTPassword string `json:"ptt_password"`
-}
-
-// PTTAccountResponse represents a PTT account binding response
-type PTTAccountResponse struct {
-	Bound       bool   `json:"bound"`
-	PTTUsername string `json:"ptt_username,omitempty"`
-}
-
-// GetPTTAccount returns the PTT account binding status
-func GetPTTAccount(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	claims := auth.GetUserFromContext(r.Context())
-	if claims == nil {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
-		return
-	}
-
-	pttAccount, err := pttAccountRepo.FindByUserID(claims.UserID)
-	if err != nil {
-		if err == account.ErrPTTAccountNotFound {
-			writeJSON(w, http.StatusOK, PTTAccountResponse{Bound: false})
-			return
-		}
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "取得 PTT 帳號失敗"})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, PTTAccountResponse{
-		Bound:       true,
-		PTTUsername: pttAccount.PTTUsername,
-	})
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 // BindPTTAccount binds a PTT account to the user
@@ -69,13 +39,13 @@ func BindPTTAccount(w http.ResponseWriter, r *http.Request, _ httprouter.Params)
 	}
 
 	// Validate
-	if req.PTTUsername == "" || req.PTTPassword == "" {
+	if req.Username == "" || req.Password == "" {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "PTT 帳號和密碼為必填"})
 		return
 	}
 
 	// Test PTT login
-	client := mail.NewPTTClient(req.PTTUsername, req.PTTPassword)
+	client := mail.NewPTTClient(req.Username, req.Password)
 	if err := client.SendMail("", "", ""); err != nil {
 		// We expect this to fail since we're not actually sending mail
 		// But if it's a login error, we should report it
@@ -89,7 +59,7 @@ func BindPTTAccount(w http.ResponseWriter, r *http.Request, _ httprouter.Params)
 	existing, _ := pttAccountRepo.FindByUserID(claims.UserID)
 	if existing != nil {
 		// Update existing
-		_, err := pttAccountRepo.Update(claims.UserID, req.PTTUsername, req.PTTPassword)
+		_, err := pttAccountRepo.Update(claims.UserID, req.Username, req.Password)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "更新 PTT 帳號失敗"})
 			return
@@ -99,7 +69,7 @@ func BindPTTAccount(w http.ResponseWriter, r *http.Request, _ httprouter.Params)
 	}
 
 	// Create new binding
-	_, err := pttAccountRepo.Create(claims.UserID, req.PTTUsername, req.PTTPassword)
+	_, err := pttAccountRepo.Create(claims.UserID, req.Username, req.Password)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "綁定 PTT 帳號失敗"})
 		return

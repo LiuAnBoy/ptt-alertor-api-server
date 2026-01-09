@@ -129,7 +129,6 @@ func main() {
 	router.DELETE("/api/admin/roles/:role", auth.RequireAdmin(api.AdminDeleteRole))
 
 	// API v1 - PTT Account (VIP+ only)
-	router.GET("/api/ptt-account", auth.JWTAuth(api.GetPTTAccount))
 	router.POST("/api/ptt-account", auth.JWTAuth(api.BindPTTAccount))
 	router.DELETE("/api/ptt-account", auth.JWTAuth(api.UnbindPTTAccount))
 
