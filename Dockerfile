@@ -16,7 +16,6 @@ RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 
-COPY public/ public/
 COPY --from=builder /app/ptt-alertor .
 
 ENTRYPOINT ["./ptt-alertor"]
