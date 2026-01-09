@@ -55,12 +55,10 @@ func (c *PTTClient) SendMail(recipient, subject, content string) error {
 	defer cancel()
 
 	// Connect to PTT via SSH
-	log.Info("Connecting to PTT via SSH...")
 	if err := c.connect(ctx); err != nil {
 		return fmt.Errorf("connect failed: %w", err)
 	}
 	defer c.close()
-	log.Info("PTT SSH connected")
 
 	// Login
 	if err := c.login(ctx); err != nil {
@@ -144,43 +142,27 @@ func (c *PTTClient) connect(_ context.Context) error {
 func (c *PTTClient) readLoop() {
 	reader := bufio.NewReader(c.stdout)
 	buf := make([]byte, 4096)
-	totalRead := 0
 
 	for {
 		select {
 		case <-c.stopRead:
-			log.WithField("total_bytes", totalRead).Debug("readLoop stopped")
 			return
 		default:
 		}
 
 		n, err := reader.Read(buf)
 		if n > 0 {
-			totalRead += n
 			c.screenLock.Lock()
 			c.screenBuf.Write(buf[:n])
-			bufLen := c.screenBuf.Len()
 			// Prevent unbounded growth
-			if bufLen > 50000 {
+			if c.screenBuf.Len() > 50000 {
 				tmp := c.screenBuf.Bytes()
 				c.screenBuf.Reset()
 				c.screenBuf.Write(tmp[len(tmp)-20000:])
 			}
 			c.screenLock.Unlock()
-
-			// Log first few reads for debugging
-			if totalRead <= 10000 {
-				log.WithFields(log.Fields{
-					"bytes_read":  n,
-					"total_read":  totalRead,
-					"buffer_size": bufLen,
-				}).Debug("readLoop received data")
-			}
 		}
 		if err != nil {
-			if err != io.EOF {
-				log.WithError(err).Debug("readLoop error")
-			}
 			return
 		}
 	}
@@ -199,14 +181,11 @@ func (c *PTTClient) close() {
 	}
 }
 
-// send sends a string to PTT
-// Note: When using SSH user "bbsu", PTT expects UTF-8, no conversion needed
+// send sends a string to PTT (UTF-8)
 func (c *PTTClient) send(s string) error {
 	if c.stdin == nil {
 		return errors.New("stdin is nil")
 	}
-
-	// bbsu user expects UTF-8, send directly
 	_, err := c.stdin.Write([]byte(s))
 	return err
 }
@@ -226,7 +205,6 @@ func (c *PTTClient) sendByte(b byte) error {
 }
 
 // getScreen returns current screen content as UTF-8 string
-// Note: When using SSH user "bbsu", PTT sends UTF-8 encoded text, no conversion needed
 func (c *PTTClient) getScreen() string {
 	c.screenLock.Lock()
 	defer c.screenLock.Unlock()
@@ -234,18 +212,7 @@ func (c *PTTClient) getScreen() string {
 	if c.screenBuf.Len() == 0 {
 		return ""
 	}
-
-	// bbsu user sends UTF-8, no need to decode Big5
 	return c.screenBuf.String()
-}
-
-// getScreenRaw returns current screen content as raw bytes for debugging
-func (c *PTTClient) getScreenRaw() []byte {
-	c.screenLock.Lock()
-	defer c.screenLock.Unlock()
-	result := make([]byte, c.screenBuf.Len())
-	copy(result, c.screenBuf.Bytes())
-	return result
 }
 
 // clearScreen clears the screen buffer
@@ -257,16 +224,14 @@ func (c *PTTClient) clearScreen() {
 
 // stripANSI removes ANSI escape codes from string for easier text matching
 func stripANSI(s string) string {
-	// Simple ANSI escape code stripper
 	result := make([]byte, 0, len(s))
 	inEscape := false
 	for i := 0; i < len(s); i++ {
-		if s[i] == 0x1b { // ESC
+		if s[i] == 0x1b {
 			inEscape = true
 			continue
 		}
 		if inEscape {
-			// End of escape sequence
 			if (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') {
 				inEscape = false
 			}
@@ -289,7 +254,6 @@ func (c *PTTClient) waitFor(ctx context.Context, timeout time.Duration, texts ..
 			return c.getScreen(), false
 		case <-ticker.C:
 			screen := c.getScreen()
-			// Try matching with both raw and ANSI-stripped versions
 			strippedScreen := stripANSI(screen)
 			for _, text := range texts {
 				if text != "" {
@@ -305,67 +269,34 @@ func (c *PTTClient) waitFor(ctx context.Context, timeout time.Duration, texts ..
 
 // login performs PTT login
 func (c *PTTClient) login(ctx context.Context) error {
-	log.Info("Starting PTT login")
-
-	// Wait for PTT welcome screen - look for various indicators
+	// Wait for PTT welcome screen
 	screen, found := c.waitFor(ctx, 10*time.Second, "請輸入代號", "代號", "PTT", "批踢踢")
 
-	// Log both raw and stripped versions for debugging
-	strippedScreen := stripANSI(screen)
-	log.WithFields(log.Fields{
-		"screen_preview":  truncate(screen, 300),
-		"stripped_screen": truncate(strippedScreen, 300),
-		"buffer_size":     len(c.getScreenRaw()),
-	}).Info("Initial screen")
-
-	// Even if we don't find exact prompt, if we got any screen data, try to proceed
 	if !found && screen == "" {
 		return errors.New("no response from PTT server")
 	}
 
-	// Clear buffer before sending username to get clean response
 	c.clearScreen()
 
 	// Send username
-	log.WithField("username", c.username).Info("Sending username")
 	if err := c.sendLine(c.username); err != nil {
 		return err
 	}
 
 	// Wait for password prompt
-	screen, found = c.waitFor(ctx, 5*time.Second, "請輸入您的密碼", "密碼")
-	strippedScreen = stripANSI(screen)
-	log.WithFields(log.Fields{
-		"found":           found,
-		"stripped_screen": truncate(strippedScreen, 200),
-	}).Info("After sending username")
+	c.waitFor(ctx, 5*time.Second, "請輸入您的密碼", "密碼")
 
-	if !found {
-		// Check stripped version
-		if !strings.Contains(strippedScreen, "密碼") {
-			log.Warn("Password prompt not found")
-		}
-	}
-
-	// Clear buffer and send password
+	// Send password
 	c.clearScreen()
-	log.Info("Sending password")
 	if err := c.sendLine(c.password); err != nil {
 		return err
 	}
 
 	// Handle post-login screens
-	for i := range 25 {
+	for range 25 {
 		time.Sleep(400 * time.Millisecond)
 		screen = c.getScreen()
-		strippedScreen = stripANSI(screen)
-
-		if i < 5 || i%5 == 0 {
-			log.WithFields(log.Fields{
-				"iteration":       i,
-				"stripped_screen": truncate(strippedScreen, 200),
-			}).Info("Login screen check")
-		}
+		strippedScreen := stripANSI(screen)
 
 		// Check for login failure
 		if strings.Contains(strippedScreen, "密碼不對") || (strings.Contains(strippedScreen, "錯誤") && strings.Contains(strippedScreen, "密碼")) {
@@ -375,13 +306,11 @@ func (c *PTTClient) login(ctx context.Context) error {
 		// Check if we reached main menu
 		if strings.Contains(strippedScreen, "主功能表") || strings.Contains(strippedScreen, "【主選單】") ||
 			strings.Contains(strippedScreen, "主選單") {
-			log.Info("Login successful, reached main menu")
 			return nil
 		}
 
 		// Handle duplicate login
 		if strings.Contains(strippedScreen, "您想刪除其他重複登入") || strings.Contains(strippedScreen, "重複登入") {
-			log.Info("Handling duplicate login, sending 'n'")
 			c.clearScreen()
 			c.sendLine("n")
 			continue
@@ -389,7 +318,6 @@ func (c *PTTClient) login(ctx context.Context) error {
 
 		// Press any key to continue
 		if strings.Contains(strippedScreen, "請按任意鍵繼續") || strings.Contains(strippedScreen, "按任意鍵") {
-			log.Info("Pressing Enter to continue")
 			c.clearScreen()
 			c.send("\r")
 			continue
@@ -397,15 +325,8 @@ func (c *PTTClient) login(ctx context.Context) error {
 
 		// Handle error attempts deletion prompt
 		if strings.Contains(strippedScreen, "您要刪除以上錯誤嘗試") {
-			log.Info("Deleting error attempts, sending 'y'")
 			c.clearScreen()
 			c.sendLine("y")
-			continue
-		}
-
-		// Still logging in
-		if strings.Contains(screen, "登入中") || strings.Contains(screen, "請稍候") {
-			log.Debug("Login in progress...")
 			continue
 		}
 	}
@@ -413,23 +334,17 @@ func (c *PTTClient) login(ctx context.Context) error {
 	// Check final state
 	screen = c.getScreen()
 	if strings.Contains(screen, "主功能表") || strings.Contains(screen, "【主選單】") {
-		log.Info("Login successful")
 		return nil
 	}
 
-	log.WithField("screen", truncate(screen, 500)).Warn("Login flow completed but main menu not detected")
 	return nil
 }
 
 // sendMailInternal sends mail after login
 func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, content string) error {
-	log.WithField("recipient", recipient).Info("Starting mail send process")
-
-	// Clear screen buffer for fresh reads
 	c.clearScreen()
 
-	// Step 1: Press 'M' then Enter to enter Mail menu
-	log.Info("Pressing 'M' + Enter for Mail menu")
+	// Step 1: Press 'M' + Enter for Mail menu
 	if err := c.send("M"); err != nil {
 		return fmt.Errorf("failed to send M: %w", err)
 	}
@@ -438,24 +353,18 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 		return fmt.Errorf("failed to send Enter after M: %w", err)
 	}
 
-	screen, found := c.waitFor(ctx, 5*time.Second, "郵件選單", "我的信箱", "電子郵件", "站內寄信", "寄發新信")
-	stripped := stripANSI(screen)
-	log.WithField("stripped_screen", truncate(stripped, 300)).Info("Screen after M+Enter")
+	_, found := c.waitFor(ctx, 5*time.Second, "郵件選單", "我的信箱", "電子郵件", "站內寄信", "寄發新信")
 
 	if !found {
-		log.Warn("Mail menu not found, retrying...")
 		c.clearScreen()
 		c.send("M")
 		time.Sleep(200 * time.Millisecond)
 		c.send("\r")
-		screen, _ = c.waitFor(ctx, 5*time.Second, "郵件選單", "我的信箱", "電子郵件")
-		stripped = stripANSI(screen)
-		log.WithField("stripped_screen", truncate(stripped, 300)).Info("Screen after retry M+Enter")
+		c.waitFor(ctx, 5*time.Second, "郵件選單", "我的信箱", "電子郵件")
 	}
 
-	// Step 2: Press 'S' then Enter to start sending mail
+	// Step 2: Press 'S' + Enter for Send mail
 	c.clearScreen()
-	log.Info("Pressing 'S' + Enter for Send mail")
 	if err := c.send("S"); err != nil {
 		return fmt.Errorf("failed to send S: %w", err)
 	}
@@ -464,112 +373,71 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 		return fmt.Errorf("failed to send Enter after S: %w", err)
 	}
 
-	screen, found = c.waitFor(ctx, 5*time.Second, "收信人", "收件人", "站內寄信", "請輸入收件人")
-	stripped = stripANSI(screen)
-	log.WithField("stripped_screen", truncate(stripped, 300)).Info("Screen after S+Enter")
+	c.waitFor(ctx, 5*time.Second, "收信人", "收件人", "站內寄信", "請輸入收件人")
 
-	if !found {
-		log.Warn("Recipient prompt not found")
-	}
-
-	// Step 3: Enter recipient + Enter
+	// Step 3: Enter recipient
 	c.clearScreen()
-	log.WithField("recipient", recipient).Info("Entering recipient")
 	if err := c.sendLine(recipient); err != nil {
 		return fmt.Errorf("failed to send recipient: %w", err)
 	}
 
-	screen, _ = c.waitFor(ctx, 5*time.Second, "標題", "主旨", "主題", "Subject", "無此帳號", "找不到")
-	stripped = stripANSI(screen)
-	log.WithField("stripped_screen", truncate(stripped, 300)).Info("Screen after recipient")
+	screen, _ := c.waitFor(ctx, 5*time.Second, "標題", "主旨", "主題", "Subject", "無此帳號", "找不到")
+	stripped := stripANSI(screen)
 
-	// Check for user not found
 	if strings.Contains(stripped, "無此帳號") || strings.Contains(stripped, "找不到") {
 		return ErrUserNotFound
 	}
 
-	// Step 4: Enter subject + Enter
+	// Step 4: Enter subject
 	c.clearScreen()
-	log.WithField("subject", subject).Info("Entering subject")
 	if err := c.sendLine(subject); err != nil {
 		return fmt.Errorf("failed to send subject: %w", err)
 	}
 
-	// Wait for editor
-	screen, _ = c.waitFor(ctx, 3*time.Second, "編輯", "Ctrl", "內文")
-	stripped = stripANSI(screen)
-	log.WithField("stripped_screen", truncate(stripped, 200)).Info("Screen after subject")
+	c.waitFor(ctx, 3*time.Second, "編輯", "Ctrl", "內文")
 
 	// Step 5: Enter content
 	c.clearScreen()
-	log.WithField("content_lines", len(strings.Split(content, "\n"))).Info("Entering mail content")
-	// Send content directly (no need to convert newlines, just send as-is)
 	if err := c.send(content); err != nil {
 		return fmt.Errorf("failed to send content: %w", err)
 	}
 	time.Sleep(500 * time.Millisecond)
 
 	// Step 6: Press Ctrl+X to finish editing
-	log.Info("Sending Ctrl+X to finish editing")
 	if err := c.sendByte(0x18); err != nil {
 		return fmt.Errorf("failed to send Ctrl+X: %w", err)
 	}
 
-	screen, _ = c.waitFor(ctx, 3*time.Second, "檔案處理", "存檔", "儲存", "(S)")
-	stripped = stripANSI(screen)
-	log.WithField("stripped_screen", truncate(stripped, 200)).Info("Screen after Ctrl+X")
+	c.waitFor(ctx, 3*time.Second, "檔案處理", "存檔", "儲存", "(S)")
 
 	// Step 7: Press Enter to save/send
 	c.clearScreen()
-	log.Info("Pressing Enter to save")
 	if err := c.send("\r"); err != nil {
 		return fmt.Errorf("failed to send Enter: %w", err)
 	}
 
-	// Wait for signature prompt
-	screen, _ = c.waitFor(ctx, 3*time.Second, "簽名檔", "選擇簽名檔")
-	stripped = stripANSI(screen)
-	log.WithField("stripped_screen", truncate(stripped, 200)).Info("Screen after Enter (signature prompt)")
+	c.waitFor(ctx, 3*time.Second, "簽名檔", "選擇簽名檔")
 
 	// Step 8: Select '0' for no signature
 	c.clearScreen()
-	log.Info("Selecting no signature (0)")
 	if err := c.send("0"); err != nil {
 		return fmt.Errorf("failed to send 0: %w", err)
 	}
 
-	// Wait for draft prompt
-	screen, _ = c.waitFor(ctx, 3*time.Second, "存底", "底稿", "自存底稿", "是否")
-	stripped = stripANSI(screen)
-	log.WithField("stripped_screen", truncate(stripped, 200)).Info("Screen after signature selection")
+	c.waitFor(ctx, 3*time.Second, "存底", "底稿", "自存底稿", "是否")
 
 	// Step 9: Press 'n' + Enter to not save draft
 	c.clearScreen()
-	log.Info("Pressing 'n' + Enter to not save draft")
 	if err := c.sendLine("n"); err != nil {
 		return fmt.Errorf("failed to send n: %w", err)
 	}
 
-	// Wait for completion
 	time.Sleep(500 * time.Millisecond)
-	screen = c.getScreen()
-	stripped = stripANSI(screen)
 
 	log.WithFields(log.Fields{
-		"recipient":       recipient,
-		"subject":         subject,
-		"stripped_screen": truncate(stripped, 300),
-	}).Info("PTT mail send completed")
-
-	// Check for success indicators
-	if strings.Contains(stripped, "信件已送出") ||
-		strings.Contains(stripped, "順利寄出") ||
-		strings.Contains(stripped, "寄出") ||
-		strings.Contains(stripped, "成功") {
-		log.Info("PTT mail sent successfully (confirmed)")
-	} else {
-		log.Info("PTT mail send completed (no explicit confirmation)")
-	}
+		"recipient": recipient,
+		"subject":   subject,
+	}).Info("PTT mail sent")
 
 	return nil
 }
@@ -579,13 +447,11 @@ func (c *PTTClient) TestLogin() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Connect to PTT via SSH
 	if err := c.connect(ctx); err != nil {
 		return fmt.Errorf("connect failed: %w", err)
 	}
 	defer c.close()
 
-	// Login
 	if err := c.login(ctx); err != nil {
 		return err
 	}
@@ -603,17 +469,4 @@ func SendMail(username, password, recipient, subject, content string) error {
 func TestCredentials(username, password string) error {
 	client := NewPTTClient(username, password)
 	return client.TestLogin()
-}
-
-// truncate truncates a string to max length
-func truncate(s string, maxLen int) string {
-	// Remove ANSI escape codes for cleaner logging
-	s = strings.ReplaceAll(s, "\x1b", "\\x1b")
-	// Remove other control characters
-	s = strings.ReplaceAll(s, "\r", "\\r")
-	s = strings.ReplaceAll(s, "\n", "\\n")
-	if len(s) > maxLen {
-		return s[:maxLen] + "..."
-	}
-	return s
 }
