@@ -49,13 +49,17 @@ func (c *PTTClient) SendMail(recipient, subject, content string) error {
 	defer cancel()
 
 	// Connect to PTT
+	log.Info("Connecting to PTT WebSocket...")
 	if err := c.connect(ctx); err != nil {
 		return fmt.Errorf("connect failed: %w", err)
 	}
 	defer c.close()
+	log.Info("PTT WebSocket connected")
 
-	// Wait for initial screen
-	time.Sleep(1 * time.Second)
+	// Wait for initial screen and read it
+	time.Sleep(2 * time.Second)
+	initialScreen, _ := c.readScreen(ctx, 3*time.Second)
+	log.WithField("screen", string(initialScreen)).Info("Initial screen after connect")
 
 	// Login
 	if err := c.login(ctx); err != nil {
@@ -321,21 +325,36 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) (resu
 
 	var screenData []byte
 	deadline := time.Now().Add(timeout)
+	readCount := 0
+	errorCount := 0
 
 	for time.Now().Before(deadline) {
 		// Set deadline for each read operation
 		c.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 
-		_, data, readErr := c.conn.ReadMessage()
+		msgType, data, readErr := c.conn.ReadMessage()
 		if readErr != nil {
+			errorCount++
 			// Timeout is expected, continue trying until deadline
 			if time.Now().Before(deadline) {
 				continue
 			}
 			break
 		}
+		readCount++
+		log.WithFields(log.Fields{
+			"msgType":  msgType,
+			"dataLen":  len(data),
+			"rawBytes": fmt.Sprintf("%v", data[:min(50, len(data))]),
+		}).Info("ReadMessage received data")
 		screenData = append(screenData, data...)
 	}
+
+	log.WithFields(log.Fields{
+		"readCount":   readCount,
+		"errorCount":  errorCount,
+		"totalBytes":  len(screenData),
+	}).Info("readScreen finished")
 
 	// Convert Big5 to UTF-8
 	decoder := traditionalchinese.Big5.NewDecoder()
