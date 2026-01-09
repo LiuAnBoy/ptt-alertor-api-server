@@ -244,6 +244,18 @@ func (c *PTTClient) login(ctx context.Context) error {
 			return nil
 		}
 
+		// "登入中，請稍候" - Just wait, don't send anything
+		if strings.Contains(screenStr, "登入中") || strings.Contains(screenStr, "請稍候") {
+			log.Info("Login in progress, waiting...")
+			continue
+		}
+
+		// "密碼正確" - Login successful, wait for next screen
+		if strings.Contains(screenStr, "密碼正確") {
+			log.Info("Password correct, waiting for next screen...")
+			continue
+		}
+
 		// Handle duplicate login IMMEDIATELY - this is time-sensitive
 		if strings.Contains(screenStr, "您想刪除其他重複登入") || strings.Contains(screenStr, "重複登入") {
 			log.Info("Handling duplicate login prompt, sending N")
@@ -265,11 +277,8 @@ func (c *PTTClient) login(ctx context.Context) error {
 			continue
 		}
 
-		// If we got here with some content but didn't match anything, try pressing Enter
-		if len(screenStr) > 50 {
-			log.Info("Unknown screen, pressing Enter")
-			c.sendString("\r")
-		}
+		// Don't send anything for unknown screens - just wait
+		log.WithField("screen", screenStr).Info("Unknown screen, waiting...")
 	}
 
 	// Even if main menu not detected, if we're not at login screen, consider it successful
