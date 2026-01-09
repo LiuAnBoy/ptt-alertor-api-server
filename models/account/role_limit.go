@@ -16,6 +16,7 @@ var (
 
 // RoleLimit represents a role's subscription limit configuration
 type RoleLimit struct {
+	ID               int       `json:"id"`
 	Role             string    `json:"role"`
 	MaxSubscriptions int       `json:"max_subscriptions"`
 	Description      string    `json:"description"`
@@ -55,10 +56,11 @@ func (p *RoleLimitPostgres) FindByRole(role string) (*RoleLimit, error) {
 
 	var rl RoleLimit
 	err := pool.QueryRow(ctx, `
-		SELECT role, max_subscriptions, description, created_at, updated_at
+		SELECT id, role, max_subscriptions, description, created_at, updated_at
 		FROM role_limits
 		WHERE role = $1
 	`, role).Scan(
+		&rl.ID,
 		&rl.Role,
 		&rl.MaxSubscriptions,
 		&rl.Description,
@@ -82,14 +84,9 @@ func (p *RoleLimitPostgres) List() ([]*RoleLimit, error) {
 	pool := connections.Postgres()
 
 	rows, err := pool.Query(ctx, `
-		SELECT role, max_subscriptions, description, created_at, updated_at
+		SELECT id, role, max_subscriptions, description, created_at, updated_at
 		FROM role_limits
-		ORDER BY
-			CASE role
-				WHEN 'admin' THEN 1
-				WHEN 'vip' THEN 2
-				ELSE 3
-			END
+		ORDER BY id
 	`)
 	if err != nil {
 		return nil, err
@@ -100,6 +97,7 @@ func (p *RoleLimitPostgres) List() ([]*RoleLimit, error) {
 	for rows.Next() {
 		var rl RoleLimit
 		err := rows.Scan(
+			&rl.ID,
 			&rl.Role,
 			&rl.MaxSubscriptions,
 			&rl.Description,
@@ -124,8 +122,9 @@ func (p *RoleLimitPostgres) Create(role string, maxSubs int, description string)
 	err := pool.QueryRow(ctx, `
 		INSERT INTO role_limits (role, max_subscriptions, description)
 		VALUES ($1, $2, $3)
-		RETURNING role, max_subscriptions, description, created_at, updated_at
+		RETURNING id, role, max_subscriptions, description, created_at, updated_at
 	`, role, maxSubs, description).Scan(
+		&rl.ID,
 		&rl.Role,
 		&rl.MaxSubscriptions,
 		&rl.Description,
@@ -150,8 +149,9 @@ func (p *RoleLimitPostgres) Update(role string, maxSubs int, description string)
 		UPDATE role_limits
 		SET max_subscriptions = $2, description = $3
 		WHERE role = $1
-		RETURNING role, max_subscriptions, description, created_at, updated_at
+		RETURNING id, role, max_subscriptions, description, created_at, updated_at
 	`, role, maxSubs, description).Scan(
+		&rl.ID,
 		&rl.Role,
 		&rl.MaxSubscriptions,
 		&rl.Description,

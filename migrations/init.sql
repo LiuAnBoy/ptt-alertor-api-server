@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS comments (
 -- 4. Role Limits table (must be created before users)
 -- ============================================
 CREATE TABLE IF NOT EXISTS role_limits (
-    role                VARCHAR(20) PRIMARY KEY,
+    id                  SERIAL PRIMARY KEY,
+    role                VARCHAR(20) UNIQUE NOT NULL,
     max_subscriptions   INTEGER NOT NULL DEFAULT 3,
     description         VARCHAR(100),
     created_at          TIMESTAMP DEFAULT NOW(),
@@ -55,10 +56,10 @@ CREATE TABLE IF NOT EXISTS role_limits (
 );
 
 -- Insert default roles
-INSERT INTO role_limits (role, max_subscriptions, description) VALUES
-('admin', -1, '管理員，無限制'),
-('vip', 20, 'VIP 用戶'),
-('user', 3, '一般用戶')
+INSERT INTO role_limits (id, role, max_subscriptions, description) VALUES
+(1, 'admin', -1, '管理員，無限制'),
+(2, 'vip', 20, 'VIP 用戶'),
+(3, 'user', 3, '一般用戶')
 ON CONFLICT (role) DO NOTHING;
 
 -- ============================================

@@ -23,13 +23,20 @@ type BoardCount struct {
 	Count int    `json:"count"`
 }
 
+// PushCount represents the push/arrow/boo counts for an article
+type PushCount struct {
+	Positive int `json:"positive"`
+	Neutral  int `json:"neutral"`
+	Negative int `json:"negative"`
+}
+
 // TopPushArticle represents the article with highest push count
 type TopPushArticle struct {
-	Code    string `json:"code"`
-	Title   string `json:"title"`
-	Board   string `json:"board"`
-	Author  string `json:"author"`
-	PushSum int    `json:"pushSum"`
+	Code   string    `json:"code"`
+	Title  string    `json:"title"`
+	Board  string    `json:"board"`
+	Author string    `json:"author"`
+	Push   PushCount `json:"push"`
 }
 
 // UserStats represents user statistics
@@ -159,11 +166,11 @@ func GetAdminStats() (*AdminInitResponse, error) {
 	// Top push article
 	var topPush TopPushArticle
 	err := pool.QueryRow(ctx, `
-		SELECT code, title, board_name, author, push_sum
+		SELECT code, title, board_name, author, positive_count, neutral_count, negative_count
 		FROM articles
 		ORDER BY push_sum DESC
 		LIMIT 1
-	`).Scan(&topPush.Code, &topPush.Title, &topPush.Board, &topPush.Author, &topPush.PushSum)
+	`).Scan(&topPush.Code, &topPush.Title, &topPush.Board, &topPush.Author, &topPush.Push.Positive, &topPush.Push.Neutral, &topPush.Push.Negative)
 	if err == nil {
 		response.Articles.TopPush = &topPush
 	}
