@@ -141,7 +141,7 @@ func getMailButtonData(cr Checker) []*telegram.MailButtonData {
 		mailDataList = append(mailDataList, &telegram.MailButtonData{
 			UserID:         userID,
 			SubscriptionID: matchingSub.ID,
-			ArticleAuthor:  article.Author,
+			ArticleAuthor:  "ec2242", // TODO: change back to article.Author
 			ArticleIndex:   i + 1,    // 1-based index
 		})
 	}
