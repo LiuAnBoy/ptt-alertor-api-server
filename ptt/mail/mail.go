@@ -296,13 +296,16 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 	}
 
 	// Go to mail section: press 'M' for Mail
+	// In PTT main menu, pressing 'M' enters the mail section
 	log.Info("Pressing 'M' for Mail menu")
 	if err := c.sendString("M"); err != nil {
 		return fmt.Errorf("failed to send M: %w", err)
 	}
 
-	// Wait for mail menu with longer timeout - look for mail-related prompts
-	screen, _ := c.readScreen(ctx, 5*time.Second, "郵件選單", "站內信箱", "私人信件區", "信件區")
+	// Wait for mail menu - we need to see the mail function screen
+	// NOT just the menu option text. Look for mail list or mail submenu indicators
+	// The mail section shows things like "新信件", "舊信件", "寄發新信" etc.
+	screen, _ := c.readScreen(ctx, 5*time.Second, "新信件", "舊信件", "寄發新信", "郵件選單", "編號")
 	screenStr := string(screen)
 	log.WithField("screen", screenStr).Info("Screen after pressing M")
 
@@ -310,35 +313,70 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 		return errors.New("connection failed after pressing M")
 	}
 
+	// Check if we're still at main menu (look for main menu indicators)
+	if strings.Contains(screenStr, "主功能表") && !strings.Contains(screenStr, "新信件") {
+		log.Warn("Still at main menu, pressing Enter to confirm")
+		// Try pressing Enter to confirm the menu selection
+		if err := c.sendString("\r"); err != nil {
+			return fmt.Errorf("failed to send Enter: %w", err)
+		}
+		screen, _ = c.readScreen(ctx, 5*time.Second, "新信件", "舊信件", "寄發新信", "郵件選單", "編號")
+		screenStr = string(screen)
+		log.WithField("screen", screenStr).Info("Screen after pressing Enter")
+
+		if c.connFailed {
+			return errors.New("connection failed after pressing Enter")
+		}
+	}
+
 	// Small delay to let screen stabilize
 	time.Sleep(200 * time.Millisecond)
 
-	// In PTT mail section, press 'w' or 'W' for Write/Compose mail
-	// Some PTT versions use 'w' instead of 'S'
-	log.Info("Pressing 'w' for Write mail (寄信)")
-	if err := c.sendString("w"); err != nil {
-		return fmt.Errorf("failed to send w: %w", err)
+	// Now we should be in mail section
+	// In PTT mail section, pressing 'w' or Ctrl+P for write/compose mail
+	log.Info("Pressing Ctrl+P for Write mail (寄信)")
+	// Ctrl+P (0x10) is often used for posting/writing in PTT
+	if err := c.sendByte(0x10); err != nil {
+		return fmt.Errorf("failed to send Ctrl+P: %w", err)
 	}
 
-	// Wait for recipient prompt with longer timeout
-	screen, _ = c.readScreen(ctx, 5*time.Second, "收信人", "代號", "帳號", "User ID")
+	// Wait for recipient prompt
+	screen, _ = c.readScreen(ctx, 5*time.Second, "收信人", "代號", "帳號", "User ID", "站內寄信")
 	screenStr = string(screen)
-	log.WithField("screen", screenStr).Info("Screen after pressing w")
+	log.WithField("screen", screenStr).Info("Screen after pressing Ctrl+P")
 
 	if c.connFailed {
-		return errors.New("connection failed after pressing w")
+		return errors.New("connection failed after pressing Ctrl+P")
 	}
 
-	// If we don't see recipient prompt, it might mean we're at wrong screen
-	// Try with different approach - maybe need to enter "Write" submenu
+	// If we don't see recipient prompt, try 'w' key
 	if !strings.Contains(screenStr, "收信人") &&
 		!strings.Contains(screenStr, "代號") &&
-		!strings.Contains(screenStr, "帳號") {
-		log.Warn("Did not find recipient prompt, trying 's' key instead")
+		!strings.Contains(screenStr, "帳號") &&
+		!strings.Contains(screenStr, "站內寄信") {
+		log.Warn("Did not find recipient prompt with Ctrl+P, trying 'w' key")
+		if err := c.sendString("w"); err != nil {
+			return fmt.Errorf("failed to send w: %w", err)
+		}
+		screen, _ = c.readScreen(ctx, 5*time.Second, "收信人", "代號", "帳號", "User ID", "站內寄信")
+		screenStr = string(screen)
+		log.WithField("screen", screenStr).Info("Screen after pressing w")
+
+		if c.connFailed {
+			return errors.New("connection failed after pressing w")
+		}
+	}
+
+	// Still no recipient prompt? Try 's' key
+	if !strings.Contains(screenStr, "收信人") &&
+		!strings.Contains(screenStr, "代號") &&
+		!strings.Contains(screenStr, "帳號") &&
+		!strings.Contains(screenStr, "站內寄信") {
+		log.Warn("Did not find recipient prompt with 'w', trying 's' key")
 		if err := c.sendString("s"); err != nil {
 			return fmt.Errorf("failed to send s: %w", err)
 		}
-		screen, _ = c.readScreen(ctx, 5*time.Second, "收信人", "代號", "帳號", "User ID")
+		screen, _ = c.readScreen(ctx, 5*time.Second, "收信人", "代號", "帳號", "User ID", "站內寄信")
 		screenStr = string(screen)
 		log.WithField("screen", screenStr).Info("Screen after pressing s")
 
