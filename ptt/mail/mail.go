@@ -321,38 +321,51 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) ([]by
 	errorCount := 0
 	var lastError error
 
-	for time.Now().Before(deadline) {
-		// Set deadline for each read operation
-		c.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	// Read in a separate function to catch panic
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.WithFields(log.Fields{
+					"panic":     r,
+					"readCount": readCount,
+					"dataLen":   len(screenData),
+				}).Warn("readScreen panic recovered, returning collected data")
+			}
+		}()
 
-		msgType, data, readErr := c.conn.ReadMessage()
-		if readErr != nil {
-			errorCount++
-			lastError = readErr
-			// Check if it's a fatal error (not just timeout)
-			errStr := readErr.Error()
-			if strings.Contains(errStr, "use of closed") ||
-				strings.Contains(errStr, "connection reset") ||
-				strings.Contains(errStr, "broken pipe") {
-				log.WithError(readErr).Warn("WebSocket connection error, stopping read")
-				break
+		for time.Now().Before(deadline) {
+			// Set deadline for each read operation
+			c.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+
+			msgType, data, readErr := c.conn.ReadMessage()
+			if readErr != nil {
+				errorCount++
+				lastError = readErr
+				// Check if it's a fatal error (not just timeout)
+				errStr := readErr.Error()
+				if strings.Contains(errStr, "use of closed") ||
+					strings.Contains(errStr, "connection reset") ||
+					strings.Contains(errStr, "broken pipe") {
+					log.WithError(readErr).Warn("WebSocket connection error, stopping read")
+					return
+				}
+				// Timeout is expected, continue trying until deadline
+				if time.Now().Before(deadline) {
+					continue
+				}
+				return
 			}
-			// Timeout is expected, continue trying until deadline
-			if time.Now().Before(deadline) {
-				continue
+			readCount++
+			if readCount <= 3 { // Only log first 3 to avoid spam
+				log.WithFields(log.Fields{
+					"msgType":  msgType,
+					"dataLen":  len(data),
+					"rawBytes": fmt.Sprintf("%v", data[:min(50, len(data))]),
+				}).Info("ReadMessage received data")
 			}
-			break
+			screenData = append(screenData, data...)
 		}
-		readCount++
-		if readCount <= 3 { // Only log first 3 to avoid spam
-			log.WithFields(log.Fields{
-				"msgType":  msgType,
-				"dataLen":  len(data),
-				"rawBytes": fmt.Sprintf("%v", data[:min(50, len(data))]),
-			}).Info("ReadMessage received data")
-		}
-		screenData = append(screenData, data...)
-	}
+	}()
 
 	log.WithFields(log.Fields{
 		"readCount":  readCount,
