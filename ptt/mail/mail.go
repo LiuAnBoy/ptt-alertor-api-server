@@ -34,6 +34,8 @@ type PTTClient struct {
 	username   string
 	password   string
 	connFailed bool // Flag to indicate connection has failed
+	readCh     chan []byte // Channel for receiving data from read goroutine
+	closeCh    chan struct{} // Channel to signal read goroutine to stop
 }
 
 // NewPTTClient creates a new PTT client
@@ -90,6 +92,13 @@ func (c *PTTClient) connect(ctx context.Context) error {
 	}
 
 	c.conn = conn
+	c.readCh = make(chan []byte, 100) // Buffer for incoming data
+	c.closeCh = make(chan struct{})
+
+	// Start a single goroutine to read from websocket
+	// This prevents concurrent reads which cause gorilla/websocket to panic
+	go c.readLoop()
+
 	return nil
 }
 
@@ -189,8 +198,56 @@ func (c *PTTClient) sendBytes(data []byte) error {
 
 // close closes the WebSocket connection
 func (c *PTTClient) close() {
+	// Signal read goroutine to stop
+	if c.closeCh != nil {
+		close(c.closeCh)
+	}
 	if c.conn != nil {
 		c.conn.Close()
+	}
+}
+
+
+// readLoop continuously reads from websocket and sends data to channel
+// This ensures only one goroutine reads from the connection at a time
+func (c *PTTClient) readLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.WithField("panic", r).Warn("readLoop panic recovered")
+			c.connFailed = true
+		}
+	}()
+
+	for {
+		select {
+		case <-c.closeCh:
+			return
+		default:
+		}
+
+		_, data, err := c.conn.ReadMessage()
+		if err != nil {
+			errStr := err.Error()
+			// Check for fatal errors
+			if strings.Contains(errStr, "use of closed") ||
+				strings.Contains(errStr, "connection reset") ||
+				strings.Contains(errStr, "broken pipe") ||
+				strings.Contains(errStr, "EOF") {
+				log.WithError(err).Warn("readLoop: connection error")
+				c.connFailed = true
+				return
+			}
+			// For other errors, continue
+			continue
+		}
+
+		// Send data to channel (non-blocking)
+		select {
+		case c.readCh <- data:
+		default:
+			// Channel full, drop data (shouldn't happen with buffer)
+			log.Warn("readLoop: channel full, dropping data")
+		}
 	}
 }
 
@@ -468,58 +525,22 @@ func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration, stopTex
 	readCount := 0
 	stopReading := false
 
-	// Use a channel-based approach instead of SetReadDeadline
-	// This prevents gorilla/websocket from marking connection as failed on timeout
-	type readResult struct {
-		msgType int
-		data    []byte
-		err     error
-	}
-
-	for time.Now().Before(deadline) && !stopReading {
-		resultCh := make(chan readResult, 1)
-
-		// Read in goroutine
-		go func() {
-			msgType, data, err := c.conn.ReadMessage()
-			resultCh <- readResult{msgType, data, err}
-		}()
-
-		// Wait for result or timeout
+	for time.Now().Before(deadline) && !stopReading && !c.connFailed {
+		// Wait for data from channel or timeout
 		select {
-		case result := <-resultCh:
-			if result.err != nil {
-				errStr := result.err.Error()
-				// Fatal errors that indicate connection is dead
-				if strings.Contains(errStr, "use of closed") ||
-					strings.Contains(errStr, "connection reset") ||
-					strings.Contains(errStr, "broken pipe") ||
-					strings.Contains(errStr, "EOF") {
-					log.WithError(result.err).Warn("WebSocket connection error")
-					c.connFailed = true
-					break
-				}
-				// Other errors - log but continue if we have data
-				log.WithError(result.err).Debug("ReadMessage error")
-				if len(screenData) > 0 {
-					stopReading = true
-				}
-				continue
-			}
-
+		case data := <-c.readCh:
 			readCount++
 			if readCount <= 5 {
 				log.WithFields(log.Fields{
-					"msgType":  result.msgType,
-					"dataLen":  len(result.data),
-					"rawBytes": fmt.Sprintf("%v", result.data[:min(50, len(result.data))]),
+					"dataLen":  len(data),
+					"rawBytes": fmt.Sprintf("%v", data[:min(50, len(data))]),
 				}).Info("ReadMessage received data")
 			}
 
 			// Handle Telnet negotiation commands in the data
-			c.handleTelnetNegotiation(result.data)
+			c.handleTelnetNegotiation(data)
 
-			screenData = append(screenData, result.data...)
+			screenData = append(screenData, data...)
 
 			// Check if we should stop reading (found any stop text)
 			if len(stopText) > 0 {
@@ -536,7 +557,7 @@ func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration, stopTex
 			}
 
 		case <-time.After(500 * time.Millisecond):
-			// Timeout waiting for this read, but don't mark connection as failed
+			// Timeout waiting for this chunk
 			// If we have data, we can return it
 			if len(screenData) > 0 {
 				stopReading = true
