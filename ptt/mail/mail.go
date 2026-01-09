@@ -158,6 +158,8 @@ func (c *PTTClient) login(ctx context.Context) error {
 
 // sendMailInternal sends mail after login
 func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, content string) error {
+	log.WithField("recipient", recipient).Debug("Starting mail send process")
+
 	// Go to mail section: press 'M' for Mail
 	if err := c.sendString("M"); err != nil {
 		return err
@@ -171,7 +173,9 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 	time.Sleep(500 * time.Millisecond)
 
 	// Wait for recipient prompt
-	c.waitForScreen(ctx, "收信人", 3*time.Second)
+	if err := c.waitForScreen(ctx, "收信人", 3*time.Second); err != nil {
+		log.WithField("error", err).Debug("Did not find recipient prompt")
+	}
 
 	// Enter recipient
 	if err := c.sendString(recipient + "\r"); err != nil {
@@ -181,12 +185,17 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 
 	// Check if user exists
 	screen, _ := c.readScreen(ctx, 2*time.Second)
-	if strings.Contains(string(screen), "無此帳號") || strings.Contains(string(screen), "找不到這位使用者") {
+	screenStr := string(screen)
+	log.WithField("screen", screenStr).Debug("Screen after entering recipient")
+
+	if strings.Contains(screenStr, "無此帳號") || strings.Contains(screenStr, "找不到這位使用者") {
 		return ErrUserNotFound
 	}
 
 	// Wait for subject prompt
-	c.waitForScreen(ctx, "標題", 3*time.Second)
+	if err := c.waitForScreen(ctx, "標題", 3*time.Second); err != nil {
+		log.WithField("error", err).Debug("Did not find subject prompt")
+	}
 
 	// Enter subject
 	if err := c.sendString(subject + "\r"); err != nil {
@@ -196,6 +205,7 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 
 	// Enter content (in editor)
 	time.Sleep(500 * time.Millisecond)
+	log.WithField("content_lines", len(strings.Split(content, "\n"))).Debug("Entering mail content")
 
 	// Split content into lines and send
 	lines := strings.Split(content, "\n")
@@ -207,12 +217,14 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 	}
 
 	// Save and send: Ctrl+X
+	log.Debug("Sending Ctrl+X to save")
 	if err := c.sendByte(0x18); err != nil { // Ctrl+X
 		return err
 	}
 	time.Sleep(500 * time.Millisecond)
 
 	// Confirm send: press 's' or enter
+	log.Debug("Confirming send with 's'")
 	if err := c.sendString("s\r"); err != nil {
 		return err
 	}
@@ -220,7 +232,15 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 
 	// Check result
 	screen, _ = c.readScreen(ctx, 2*time.Second)
-	if strings.Contains(string(screen), "信件已送出") || strings.Contains(string(screen), "順利寄出") {
+	screenStr = string(screen)
+
+	log.WithFields(log.Fields{
+		"recipient": recipient,
+		"subject":   subject,
+		"screen":    screenStr,
+	}).Debug("PTT mail send result screen")
+
+	if strings.Contains(screenStr, "信件已送出") || strings.Contains(screenStr, "順利寄出") {
 		log.WithFields(log.Fields{
 			"recipient": recipient,
 			"subject":   subject,
@@ -228,7 +248,14 @@ func (c *PTTClient) sendMailInternal(ctx context.Context, recipient, subject, co
 		return nil
 	}
 
-	return nil
+	// Mail may not have been sent successfully
+	log.WithFields(log.Fields{
+		"recipient": recipient,
+		"subject":   subject,
+		"screen":    screenStr,
+	}).Warn("PTT mail send result unclear")
+
+	return ErrSendMailFailed
 }
 
 // sendString sends a string to PTT (converts to Big5)
