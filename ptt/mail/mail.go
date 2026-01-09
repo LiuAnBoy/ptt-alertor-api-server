@@ -146,25 +146,38 @@ func (c *PTTClient) connect(_ context.Context) error {
 func (c *PTTClient) readLoop() {
 	reader := bufio.NewReader(c.stdout)
 	buf := make([]byte, 4096)
+	totalRead := 0
 
 	for {
 		select {
 		case <-c.stopRead:
+			log.WithField("total_bytes", totalRead).Debug("readLoop stopped")
 			return
 		default:
 		}
 
 		n, err := reader.Read(buf)
 		if n > 0 {
+			totalRead += n
 			c.screenLock.Lock()
 			c.screenBuf.Write(buf[:n])
+			bufLen := c.screenBuf.Len()
 			// Prevent unbounded growth
-			if c.screenBuf.Len() > 50000 {
+			if bufLen > 50000 {
 				tmp := c.screenBuf.Bytes()
 				c.screenBuf.Reset()
 				c.screenBuf.Write(tmp[len(tmp)-20000:])
 			}
 			c.screenLock.Unlock()
+
+			// Log first few reads for debugging
+			if totalRead <= 10000 {
+				log.WithFields(log.Fields{
+					"bytes_read":  n,
+					"total_read":  totalRead,
+					"buffer_size": bufLen,
+				}).Debug("readLoop received data")
+			}
 		}
 		if err != nil {
 			if err != io.EOF {
@@ -271,15 +284,25 @@ func (c *PTTClient) waitFor(ctx context.Context, timeout time.Duration, texts ..
 func (c *PTTClient) login(ctx context.Context) error {
 	log.Info("Starting PTT login")
 
-	// Wait for login prompt
-	screen, found := c.waitFor(ctx, 10*time.Second, "請輸入代號", "代號")
-	log.WithField("screen_preview", truncate(screen, 200)).Info("Initial screen")
+	// Wait for PTT welcome screen - look for various indicators
+	// PTT might show: 請輸入代號, 代號, or just the PTT ASCII art
+	screen, found := c.waitFor(ctx, 10*time.Second, "請輸入代號", "代號", "PTT", "批踢踢")
+	log.WithField("screen_preview", truncate(screen, 500)).Info("Initial screen")
 
-	if !found {
-		return errors.New("login prompt not found")
+	// Even if we don't find exact prompt, if we got any screen data, try to proceed
+	if !found && screen == "" {
+		return errors.New("no response from PTT server")
 	}
 
-	// Send username
+	// If screen has content but no login prompt, wait a bit more and check again
+	if !strings.Contains(screen, "請輸入代號") && !strings.Contains(screen, "代號") {
+		log.Info("Login prompt not found yet, waiting more...")
+		time.Sleep(2 * time.Second)
+		screen = c.getScreen()
+		log.WithField("screen_preview", truncate(screen, 500)).Info("Screen after additional wait")
+	}
+
+	// Send username regardless - PTT should be waiting for it
 	log.WithField("username", c.username).Info("Sending username")
 	if err := c.sendLine(c.username); err != nil {
 		return err
@@ -522,6 +545,9 @@ func TestCredentials(username, password string) error {
 func truncate(s string, maxLen int) string {
 	// Remove ANSI escape codes for cleaner logging
 	s = strings.ReplaceAll(s, "\x1b", "\\x1b")
+	// Remove other control characters
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "\n", "\\n")
 	if len(s) > maxLen {
 		return s[:maxLen] + "..."
 	}
