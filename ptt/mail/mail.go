@@ -216,29 +216,37 @@ func (c *PTTClient) login(ctx context.Context) error {
 		return err
 	}
 
-	// Handle post-login screens (press any key, etc.)
-	for i := range 10 {
-		screen, _ := c.readScreen(ctx, 2*time.Second)
-		screenStr := string(screen)
+	// Wait for login result - look for various possible screens
+	// Use longer timeout and multiple stop texts
+	screen, _ = c.readScreen(ctx, 5*time.Second, "主功能表", "重複登入", "按任意鍵", "密碼不對", "錯誤")
+	screenStr := string(screen)
+	log.WithField("screen", screenStr).Info("Post-login screen")
 
-		if screenStr == "" {
-			continue
+	// Check for login failure
+	if strings.Contains(screenStr, "密碼不對") || strings.Contains(screenStr, "錯誤") {
+		return ErrLoginFailed
+	}
+
+	// Handle post-login screens
+	for i := range 10 {
+		if c.connFailed {
+			log.Warn("Connection failed during login")
+			break
 		}
 
-		log.WithFields(log.Fields{
-			"iteration": i,
-			"screen":    screenStr,
-		}).Info("Post-login screen")
-
-		// Check for login failure
-		if strings.Contains(screenStr, "密碼不對") || strings.Contains(screenStr, "錯誤") {
-			return ErrLoginFailed
+		// Check if we reached main menu
+		if strings.Contains(screenStr, "主功能表") {
+			log.Info("Login successful, reached main menu")
+			return nil
 		}
 
 		// Check for duplicate login
 		if strings.Contains(screenStr, "您想刪除其他重複登入") {
 			log.Info("Handling duplicate login prompt")
 			c.sendString("n\r") // Don't kick other login
+			screen, _ = c.readScreen(ctx, 3*time.Second, "主功能表", "按任意鍵")
+			screenStr = string(screen)
+			log.WithFields(log.Fields{"iteration": i, "screen": screenStr}).Info("After duplicate login response")
 			continue
 		}
 
@@ -248,14 +256,25 @@ func (c *PTTClient) login(ctx context.Context) error {
 			strings.Contains(screenStr, "您要刪除以上錯誤嘗試") {
 			log.Info("Pressing space to continue")
 			c.sendString(" ")
+			screen, _ = c.readScreen(ctx, 3*time.Second, "主功能表", "按任意鍵")
+			screenStr = string(screen)
+			log.WithFields(log.Fields{"iteration": i, "screen": screenStr}).Info("After pressing space")
 			continue
 		}
 
-		// Check if we reached main menu
-		if strings.Contains(screenStr, "主功能表") {
-			log.Info("Login successful, reached main menu")
-			return nil
+		// Try reading more data if nothing matched
+		screen, _ = c.readScreen(ctx, 2*time.Second, "主功能表", "按任意鍵", "重複登入")
+		screenStr = string(screen)
+		if screenStr == "" {
+			break
 		}
+		log.WithFields(log.Fields{"iteration": i, "screen": screenStr}).Info("Additional screen data")
+	}
+
+	// Even if main menu not detected, if we got past login, consider it successful
+	if !strings.Contains(screenStr, "密碼不對") && !strings.Contains(screenStr, "請輸入代號") {
+		log.Info("Login appears successful")
+		return nil
 	}
 
 	log.Warn("Login finished but main menu not detected")
@@ -483,13 +502,14 @@ func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration, stopTex
 
 			screenData = append(screenData, data...)
 
-			// Check if we should stop reading (found stop text)
-			if len(stopText) > 0 && stopText[0] != "" {
+			// Check if we should stop reading (found any stop text)
+			if len(stopText) > 0 {
 				// Decode current data to check for stop text
 				decoder := traditionalchinese.Big5.NewDecoder()
 				utf8Bytes, _, _ := transform.Bytes(decoder, screenData)
+				utf8Str := string(utf8Bytes)
 				for _, st := range stopText {
-					if strings.Contains(string(utf8Bytes), st) {
+					if st != "" && strings.Contains(utf8Str, st) {
 						log.WithField("stopText", st).Info("Found stop text, stopping read")
 						stopReading = true
 						break
