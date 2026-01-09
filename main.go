@@ -54,7 +54,6 @@ func newRouter() *myRouter {
 	r := &myRouter{
 		Router: *httprouter.New(),
 	}
-	r.NotFound = http.FileServer(http.Dir("public"))
 	return r
 }
 
@@ -69,15 +68,6 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"message":"Hello World!"}`))
 	})
-
-	router.GET("/", ctrlr.TelegramIndex)
-	router.GET("/telegram", ctrlr.TelegramIndex)
-	router.GET("/redirect/:checksum", ctrlr.Redirect)
-	router.GET("/top", ctrlr.Top)
-	router.GET("/docs", ctrlr.Docs)
-
-	// websocket
-	router.GET("/ws", ctrlr.WebSocket)
 
 	// boards apis
 	router.GET("/boards/:boardName/articles/:code", ctrlr.BoardArticle)
