@@ -83,11 +83,17 @@ func handleCallbackQuery(update tgbotapi.Update) {
 	userID := strconv.FormatInt(update.CallbackQuery.From.ID, 10)
 	chatID := update.CallbackQuery.Message.Chat.ID
 	data := update.CallbackQuery.Data
-	
+
+	// Answer callback query immediately to prevent Telegram from retrying
+	callback := tgbotapi.NewCallback(update.CallbackQuery.ID, "")
+	bot.Request(callback)
+
 	switch {
 	case data == "CANCEL":
 		responseText = "取消"
 	case strings.HasPrefix(data, "mail:"):
+		// Send "processing" message first for mail (takes time)
+		SendTextMessage(chatID, "⏳ 正在寄送信件...")
 		responseText = handleMailCallback(data, chatID)
 	default:
 		responseText = command.HandleCommand(data, userID, true)
