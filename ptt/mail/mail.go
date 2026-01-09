@@ -466,78 +466,63 @@ func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration, stopTex
 	var screenData []byte
 	deadline := time.Now().Add(timeout)
 	readCount := 0
-	errorCount := 0
-	var lastError error
 	stopReading := false
 
-	// Read in a separate function to catch panic
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				c.connFailed = true // Mark connection as failed
-				log.WithFields(log.Fields{
-					"panic":     r,
-					"readCount": readCount,
-					"dataLen":   len(screenData),
-				}).Warn("readScreen panic recovered, marking connection as failed")
-			}
+	// Use a channel-based approach instead of SetReadDeadline
+	// This prevents gorilla/websocket from marking connection as failed on timeout
+	type readResult struct {
+		msgType int
+		data    []byte
+		err     error
+	}
+
+	for time.Now().Before(deadline) && !stopReading {
+		resultCh := make(chan readResult, 1)
+
+		// Read in goroutine
+		go func() {
+			msgType, data, err := c.conn.ReadMessage()
+			resultCh <- readResult{msgType, data, err}
 		}()
 
-		for time.Now().Before(deadline) && !stopReading {
-			// Set deadline for each read operation
-			c.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-
-			msgType, data, readErr := c.conn.ReadMessage()
-			if readErr != nil {
-				errorCount++
-				lastError = readErr
-				errStr := readErr.Error()
-
-				// Timeout is expected, continue trying
-				if strings.Contains(errStr, "i/o timeout") {
-					// If we already have data and got timeout, we can stop
-					if len(screenData) > 0 {
-						return
-					}
-					if time.Now().Before(deadline) {
-						continue
-					}
-					return
-				}
-
-				// Fatal errors
+		// Wait for result or timeout
+		select {
+		case result := <-resultCh:
+			if result.err != nil {
+				errStr := result.err.Error()
+				// Fatal errors that indicate connection is dead
 				if strings.Contains(errStr, "use of closed") ||
 					strings.Contains(errStr, "connection reset") ||
 					strings.Contains(errStr, "broken pipe") ||
-					strings.Contains(errStr, "websocket") {
-					log.WithError(readErr).Warn("WebSocket connection error, stopping read")
+					strings.Contains(errStr, "EOF") {
+					log.WithError(result.err).Warn("WebSocket connection error")
 					c.connFailed = true
-					return
+					break
 				}
-
-				// Other errors - continue trying until deadline
-				if time.Now().Before(deadline) {
-					continue
+				// Other errors - log but continue if we have data
+				log.WithError(result.err).Debug("ReadMessage error")
+				if len(screenData) > 0 {
+					stopReading = true
 				}
-				return
+				continue
 			}
+
 			readCount++
 			if readCount <= 5 {
 				log.WithFields(log.Fields{
-					"msgType":  msgType,
-					"dataLen":  len(data),
-					"rawBytes": fmt.Sprintf("%v", data[:min(50, len(data))]),
+					"msgType":  result.msgType,
+					"dataLen":  len(result.data),
+					"rawBytes": fmt.Sprintf("%v", result.data[:min(50, len(result.data))]),
 				}).Info("ReadMessage received data")
 			}
 
 			// Handle Telnet negotiation commands in the data
-			c.handleTelnetNegotiation(data)
+			c.handleTelnetNegotiation(result.data)
 
-			screenData = append(screenData, data...)
+			screenData = append(screenData, result.data...)
 
 			// Check if we should stop reading (found any stop text)
 			if len(stopText) > 0 {
-				// Decode current data to check for stop text
 				decoder := traditionalchinese.Big5.NewDecoder()
 				utf8Bytes, _, _ := transform.Bytes(decoder, screenData)
 				utf8Str := string(utf8Bytes)
@@ -549,20 +534,20 @@ func (c *PTTClient) readScreen(_ context.Context, timeout time.Duration, stopTex
 					}
 				}
 			}
-		}
-	}()
 
-	// IMPORTANT: Clear the read deadline to prevent future reads from failing
-	// gorilla/websocket will panic if we try to read after a deadline has expired
-	if c.conn != nil && !c.connFailed {
-		c.conn.SetReadDeadline(time.Time{}) // Clear deadline
+		case <-time.After(500 * time.Millisecond):
+			// Timeout waiting for this read, but don't mark connection as failed
+			// If we have data, we can return it
+			if len(screenData) > 0 {
+				stopReading = true
+			}
+			// Otherwise continue trying until overall deadline
+		}
 	}
 
 	log.WithFields(log.Fields{
 		"readCount":  readCount,
-		"errorCount": errorCount,
 		"totalBytes": len(screenData),
-		"lastError":  fmt.Sprintf("%v", lastError),
 	}).Info("readScreen finished")
 
 	if len(screenData) == 0 {
