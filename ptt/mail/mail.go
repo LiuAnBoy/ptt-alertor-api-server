@@ -319,15 +319,19 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) (resu
 		return nil, errors.New("connection is nil")
 	}
 
-	c.conn.SetReadDeadline(time.Now().Add(timeout))
-
 	var screenData []byte
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
+		// Set deadline for each read operation
+		c.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+
 		_, data, readErr := c.conn.ReadMessage()
 		if readErr != nil {
-			// Any error means we should stop reading
+			// Timeout is expected, continue trying until deadline
+			if time.Now().Before(deadline) {
+				continue
+			}
 			break
 		}
 		screenData = append(screenData, data...)
