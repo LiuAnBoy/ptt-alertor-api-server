@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Ptt-Alertor/ptt-alertor/models"
+	"github.com/Ptt-Alertor/ptt-alertor/models/account"
 	"github.com/Ptt-Alertor/ptt-alertor/myutil"
 	"github.com/Ptt-Alertor/ptt-alertor/ptt/web"
 
@@ -23,9 +24,11 @@ import (
 )
 
 const subArticlesLimit int = 50
-const maxSubscriptions int = 3
+const defaultMaxSubscriptions int = 3
 const updateFailedMsg string = "失敗，請嘗試封鎖再解封鎖，並重新執行註冊步驟。\n若問題未解決，請至粉絲團或 LINE 首頁留言。"
-const subscriptionLimitMsg string = "已達訂閱上限（最多 3 組）"
+const subscriptionLimitMsg string = "已達訂閱上限"
+
+var roleLimitRepo = &account.RoleLimitPostgres{}
 
 var inputErrorTips = []string{
 	"指令格式錯誤。",
@@ -359,12 +362,38 @@ func countSubscriptions(userID string) int {
 	return count
 }
 
+// getMaxSubscriptionsForUser returns the max subscription limit for a user
+// by looking up their role through notification bindings (telegram/line)
+func getMaxSubscriptionsForUser(userID string) int {
+	// Try to find by telegram first
+	maxSubs, err := roleLimitRepo.GetMaxSubscriptionsByServiceID("telegram", userID)
+	if err == nil && maxSubs != defaultMaxSubscriptions {
+		return maxSubs
+	}
+
+	// Try LINE if telegram not found
+	maxSubs, err = roleLimitRepo.GetMaxSubscriptionsByServiceID("line", userID)
+	if err == nil {
+		return maxSubs
+	}
+
+	return defaultMaxSubscriptions
+}
+
 // checkSubscriptionLimit checks if user has reached subscription limit
 func checkSubscriptionLimit(userID string, isAddCommand bool) error {
 	if !isAddCommand {
 		return nil
 	}
-	if countSubscriptions(userID) >= maxSubscriptions {
+
+	maxSubs := getMaxSubscriptionsForUser(userID)
+
+	// -1 means unlimited
+	if maxSubs < 0 {
+		return nil
+	}
+
+	if countSubscriptions(userID) >= maxSubs {
 		return errors.New(subscriptionLimitMsg)
 	}
 	return nil

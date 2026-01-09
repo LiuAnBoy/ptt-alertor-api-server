@@ -44,20 +44,38 @@ CREATE TABLE IF NOT EXISTS comments (
 );
 
 -- ============================================
--- 4. Users table
+-- 4. Role Limits table (must be created before users)
+-- ============================================
+CREATE TABLE IF NOT EXISTS role_limits (
+    role                VARCHAR(20) PRIMARY KEY,
+    max_subscriptions   INTEGER NOT NULL DEFAULT 3,
+    description         VARCHAR(100),
+    created_at          TIMESTAMP DEFAULT NOW(),
+    updated_at          TIMESTAMP DEFAULT NOW()
+);
+
+-- Insert default roles
+INSERT INTO role_limits (role, max_subscriptions, description) VALUES
+('admin', -1, '管理員，無限制'),
+('vip', 20, 'VIP 用戶'),
+('user', 3, '一般用戶')
+ON CONFLICT (role) DO NOTHING;
+
+-- ============================================
+-- 5. Users table
 -- ============================================
 CREATE TABLE IF NOT EXISTS users (
     id          SERIAL PRIMARY KEY,
     email       VARCHAR(255) UNIQUE NOT NULL,
     password    VARCHAR(255) NOT NULL,
-    role        VARCHAR(20) DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+    role        VARCHAR(20) DEFAULT 'user' REFERENCES role_limits(role),
     enabled     BOOLEAN DEFAULT TRUE,
     created_at  TIMESTAMP DEFAULT NOW(),
     updated_at  TIMESTAMP DEFAULT NOW()
 );
 
 -- ============================================
--- 5. Subscriptions table
+-- 6. Subscriptions table
 -- ============================================
 CREATE TABLE IF NOT EXISTS subscriptions (
     id          SERIAL PRIMARY KEY,
@@ -72,7 +90,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 );
 
 -- ============================================
--- 6. Notification Bindings table
+-- 7. Notification Bindings table
 -- ============================================
 CREATE TABLE IF NOT EXISTS notification_bindings (
     id                   SERIAL PRIMARY KEY,
@@ -89,7 +107,7 @@ CREATE TABLE IF NOT EXISTS notification_bindings (
 );
 
 -- ============================================
--- 7. Subscription Stats table (for analytics)
+-- 8. Subscription Stats table (for analytics)
 -- ============================================
 CREATE TABLE IF NOT EXISTS subscription_stats (
     id          SERIAL PRIMARY KEY,
@@ -102,7 +120,7 @@ CREATE TABLE IF NOT EXISTS subscription_stats (
 );
 
 -- ============================================
--- 8. Indexes
+-- 9. Indexes
 -- ============================================
 -- Articles indexes
 CREATE INDEX IF NOT EXISTS idx_articles_board ON articles(board_name);
@@ -130,7 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_subscription_stats_type_count ON subscription_sta
 CREATE INDEX IF NOT EXISTS idx_subscription_stats_board ON subscription_stats(board);
 
 -- ============================================
--- 8. Triggers
+-- 10. Triggers
 -- ============================================
 -- Updated_at trigger function
 CREATE OR REPLACE FUNCTION update_updated_at()
@@ -145,6 +163,12 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS boards_updated_at ON boards;
 CREATE TRIGGER boards_updated_at
     BEFORE UPDATE ON boards
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- Apply trigger to role_limits
+DROP TRIGGER IF EXISTS role_limits_updated_at ON role_limits;
+CREATE TRIGGER role_limits_updated_at
+    BEFORE UPDATE ON role_limits
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- Apply trigger to articles

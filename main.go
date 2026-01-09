@@ -121,6 +121,13 @@ func main() {
 	router.DELETE("/api/admin/users/:id", auth.RequireAdmin(api.AdminDeleteUser))
 	router.POST("/api/admin/broadcast", auth.RequireAdmin(api.AdminBroadcast))
 
+	// API v1 - Admin Roles
+	router.GET("/api/admin/roles", auth.RequireAdmin(api.AdminListRoles))
+	router.POST("/api/admin/roles", auth.RequireAdmin(api.AdminCreateRole))
+	router.GET("/api/admin/roles/:role", auth.RequireAdmin(api.AdminGetRole))
+	router.PUT("/api/admin/roles/:role", auth.RequireAdmin(api.AdminUpdateRole))
+	router.DELETE("/api/admin/roles/:role", auth.RequireAdmin(api.AdminDeleteRole))
+
 	// gops agent
 	if err := agent.Listen(agent.Options{Addr: ":6060", ShutdownCleanup: true}); err != nil {
 		log.Fatal(err)

@@ -90,15 +90,21 @@ func CreateSubscription(w http.ResponseWriter, r *http.Request, _ httprouter.Par
 		return
 	}
 
-	// Check subscription limit for regular users
-	if claims.Role == "user" {
+	// Check subscription limit based on role
+	maxSubs, err := roleLimitRepo.GetMaxSubscriptions(claims.Role)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "檢查訂閱限制失敗"})
+		return
+	}
+	// -1 means unlimited
+	if maxSubs >= 0 {
 		count, err := subscriptionRepo.CountByUserID(claims.UserID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "檢查訂閱數量失敗"})
 			return
 		}
-		if count >= account.MaxSubscriptionsForUser {
-			writeJSON(w, http.StatusForbidden, ErrorResponse{Success: false, Message: "已達訂閱上限，一般用戶最多 3 組訂閱"})
+		if count >= maxSubs {
+			writeJSON(w, http.StatusForbidden, ErrorResponse{Success: false, Message: "已達訂閱上限"})
 			return
 		}
 	}
