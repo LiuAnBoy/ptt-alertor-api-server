@@ -310,16 +310,7 @@ func (c *PTTClient) sendByte(b byte) error {
 }
 
 // readScreen reads screen data from PTT
-func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) (result []byte, err error) {
-	// Recover from panic (gorilla/websocket panics on failed connection read)
-	defer func() {
-		if r := recover(); r != nil {
-			log.WithField("panic", r).Error("readScreen panic recovered")
-			err = fmt.Errorf("websocket panic: %v", r)
-			result = nil
-		}
-	}()
-
+func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) ([]byte, error) {
 	if c.conn == nil {
 		return nil, errors.New("connection is nil")
 	}
@@ -328,6 +319,7 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) (resu
 	deadline := time.Now().Add(timeout)
 	readCount := 0
 	errorCount := 0
+	var lastError error
 
 	for time.Now().Before(deadline) {
 		// Set deadline for each read operation
@@ -336,6 +328,15 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) (resu
 		msgType, data, readErr := c.conn.ReadMessage()
 		if readErr != nil {
 			errorCount++
+			lastError = readErr
+			// Check if it's a fatal error (not just timeout)
+			errStr := readErr.Error()
+			if strings.Contains(errStr, "use of closed") ||
+				strings.Contains(errStr, "connection reset") ||
+				strings.Contains(errStr, "broken pipe") {
+				log.WithError(readErr).Warn("WebSocket connection error, stopping read")
+				break
+			}
 			// Timeout is expected, continue trying until deadline
 			if time.Now().Before(deadline) {
 				continue
@@ -343,20 +344,21 @@ func (c *PTTClient) readScreen(ctx context.Context, timeout time.Duration) (resu
 			break
 		}
 		readCount++
-		log.WithFields(log.Fields{
-			"msgType":  msgType,
-			"dataLen":  len(data),
-			"rawBytes": fmt.Sprintf("%v", data[:min(50, len(data))]),
-		}).Info("ReadMessage received data")
+		if readCount <= 3 { // Only log first 3 to avoid spam
+			log.WithFields(log.Fields{
+				"msgType":  msgType,
+				"dataLen":  len(data),
+				"rawBytes": fmt.Sprintf("%v", data[:min(50, len(data))]),
+			}).Info("ReadMessage received data")
+		}
 		screenData = append(screenData, data...)
 	}
-
-	log.Info("readScreen for loop exited")
 
 	log.WithFields(log.Fields{
 		"readCount":  readCount,
 		"errorCount": errorCount,
 		"totalBytes": len(screenData),
+		"lastError":  fmt.Sprintf("%v", lastError),
 	}).Info("readScreen finished")
 
 	if len(screenData) == 0 {
@@ -388,6 +390,11 @@ func (c *PTTClient) waitForScreen(ctx context.Context, text string, timeout time
 
 		screen, err := c.readScreen(ctx, 1*time.Second)
 		if err != nil {
+			// If connection failed, stop retrying
+			if strings.Contains(err.Error(), "websocket panic") ||
+				strings.Contains(err.Error(), "connection is nil") {
+				return err
+			}
 			continue
 		}
 
