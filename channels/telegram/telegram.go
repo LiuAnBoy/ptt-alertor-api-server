@@ -91,10 +91,16 @@ func handleCallbackQuery(update tgbotapi.Update) {
 	switch {
 	case data == "CANCEL":
 		responseText = "取消"
-	case strings.HasPrefix(data, "mail:"):
+	case data == "mail_cancel":
+		responseText = "已取消寄信"
+	case strings.HasPrefix(data, "mail_preview:"):
+		// Show mail preview with confirm/cancel buttons
+		handleMailPreview(data, chatID)
+		return
+	case strings.HasPrefix(data, "mail_confirm:"):
 		// Send "processing" message first for mail (takes time)
 		SendTextMessage(chatID, "⏳ 正在寄送信件...")
-		responseText = handleMailCallback(data, chatID)
+		responseText = handleMailConfirm(data, chatID)
 	default:
 		responseText = command.HandleCommand(data, userID, true)
 	}
@@ -338,8 +344,8 @@ func sendTextMessageWithMailButton(chatID int64, text string, mailDataList []*Ma
 
 	for i := 0; i < maxButtons; i++ {
 		mailData := mailDataList[i]
-		// Create callback data: mail:<userID>:<subID>:<author>
-		callbackData := "mail:" + strconv.Itoa(mailData.UserID) + ":" +
+		// Create callback data: mail_preview:<userID>:<subID>:<author>
+		callbackData := "mail_preview:" + strconv.Itoa(mailData.UserID) + ":" +
 			strconv.Itoa(mailData.SubscriptionID) + ":" + mailData.ArticleAuthor
 
 		// Check if callback data is within Telegram's limit (64 bytes)
@@ -372,29 +378,103 @@ func sendTextMessageWithMailButton(chatID int64, text string, mailDataList []*Ma
 	}
 }
 
-// handleMailCallback handles the mail button callback
-func handleMailCallback(callbackData string, chatID int64) string {
-	// Parse callback data: mail:<userID>:<subID>:<author>
+// handleMailPreview shows mail preview with confirm/cancel buttons
+func handleMailPreview(callbackData string, chatID int64) {
+	// Parse callback data: mail_preview:<userID>:<subID>:<author>
+	parts := strings.Split(callbackData, ":")
+	if len(parts) != 4 {
+		SendTextMessage(chatID, "無效的請求")
+		return
+	}
+
+	userID, err := strconv.Atoi(parts[1])
+	if err != nil {
+		SendTextMessage(chatID, "無效的使用者 ID")
+		return
+	}
+
+	subID, err := strconv.Atoi(parts[2])
+	if err != nil {
+		SendTextMessage(chatID, "無效的訂閱 ID")
+		return
+	}
+
+	recipient := parts[3]
+	if recipient == "" {
+		SendTextMessage(chatID, "無效的收件者")
+		return
+	}
+
+	// Get subscription to get mail template
+	subRepo := &account.SubscriptionPostgres{}
+	sub, err := subRepo.FindByID(subID)
+	if err != nil {
+		log.WithError(err).Error("Failed to find subscription for mail preview")
+		SendTextMessage(chatID, "找不到訂閱設定")
+		return
+	}
+
+	// Check ownership
+	if sub.UserID != userID {
+		SendTextMessage(chatID, "無權限使用此訂閱")
+		return
+	}
+
+	// Check mail template
+	if sub.Mail == nil || (sub.Mail.Subject == "" && sub.Mail.Content == "") {
+		SendTextMessage(chatID, "此訂閱尚未設定信件模板")
+		return
+	}
+
+	// Build preview message
+	previewText := "📧 寄信預覽\n\n"
+	previewText += "收件人: " + recipient + "\n"
+	previewText += "標題: " + sub.Mail.Subject + "\n"
+	previewText += "─────────────\n"
+	previewText += sub.Mail.Content
+
+	// Create confirm callback data: mail_confirm:<userID>:<subID>:<author>
+	confirmData := "mail_confirm:" + strconv.Itoa(userID) + ":" +
+		strconv.Itoa(subID) + ":" + recipient
+
+	// Send preview with confirm/cancel buttons
+	msg := tgbotapi.NewMessage(chatID, previewText)
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✅ 寄信", confirmData),
+			tgbotapi.NewInlineKeyboardButtonData("❌ 取消", "mail_cancel"),
+		),
+	)
+
+	_, err = bot.Send(msg)
+	if err != nil {
+		log.WithError(err).Error("Failed to send mail preview")
+	}
+}
+
+// handleMailConfirm handles the mail confirm button callback
+func handleMailConfirm(callbackData string, chatID int64) string {
+	// Parse callback data: mail_confirm:<userID>:<subID>:<author>
 	parts := strings.Split(callbackData, ":")
 	if len(parts) != 4 {
 		return "無效的請求"
 	}
-	
+
 	userID, err := strconv.Atoi(parts[1])
 	if err != nil {
 		return "無效的使用者 ID"
 	}
-	
+
 	subID, err := strconv.Atoi(parts[2])
 	if err != nil {
 		return "無效的訂閱 ID"
 	}
-	
+
 	recipient := parts[3]
 	if recipient == "" {
 		return "無效的收件者"
 	}
-	
+
 	// Get subscription to get mail template
 	subRepo := &account.SubscriptionPostgres{}
 	sub, err := subRepo.FindByID(subID)
@@ -402,17 +482,17 @@ func handleMailCallback(callbackData string, chatID int64) string {
 		log.WithError(err).Error("Failed to find subscription for mail")
 		return "找不到訂閱設定"
 	}
-	
+
 	// Check ownership
 	if sub.UserID != userID {
 		return "無權限使用此訂閱"
 	}
-	
+
 	// Check mail template
 	if sub.Mail == nil || (sub.Mail.Subject == "" && sub.Mail.Content == "") {
 		return "此訂閱尚未設定信件模板"
 	}
-	
+
 	// Get PTT credentials
 	pttRepo := &account.PTTAccountPostgres{}
 	pttUsername, pttPassword, err := pttRepo.GetCredentials(userID)
@@ -423,7 +503,7 @@ func handleMailCallback(callbackData string, chatID int64) string {
 		log.WithError(err).Error("Failed to get PTT credentials")
 		return "取得 PTT 帳號失敗"
 	}
-	
+
 	// Send PTT mail
 	mailClient := mail.NewPTTClient(pttUsername, pttPassword)
 	err = mailClient.SendMail(recipient, sub.Mail.Subject, sub.Mail.Content)
@@ -432,7 +512,7 @@ func handleMailCallback(callbackData string, chatID int64) string {
 			"user_id":   userID,
 			"recipient": recipient,
 		}).Error("Failed to send PTT mail")
-		
+
 		if err == mail.ErrLoginFailed {
 			return "PTT 登入失敗，請確認帳號密碼是否正確"
 		}
@@ -441,13 +521,13 @@ func handleMailCallback(callbackData string, chatID int64) string {
 		}
 		return "寄信失敗，請稍後再試"
 	}
-	
+
 	log.WithFields(log.Fields{
 		"user_id":   userID,
 		"recipient": recipient,
 		"subject":   sub.Mail.Subject,
 	}).Info("PTT mail sent successfully via Telegram button")
-	
+
 	return "✅ 已成功寄信給 " + recipient
 }
 
