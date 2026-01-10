@@ -72,7 +72,6 @@ air
 | `TELEGRAM_BOT_USERNAME` | Telegram Bot Username |
 | `JWT_SECRET` | JWT 密鑰 |
 | `ALLOWED_DOMAIN` | CORS 允許的網域 (支援子網域匹配，如 `luan.com.tw`) |
-| `WEBAPP_URL` | 前端 WebApp URL (用於 Telegram 綁定連結) |
 
 ## API
 

@@ -276,11 +276,7 @@ func handleEmailInput(chatID int64, email string) {
 		return
 	}
 
-	// Get webapp URL for messages
-	webappURL := os.Getenv("WEBAPP_URL")
-	if webappURL == "" {
-		webappURL = "https://ptt.luan.com.tw"
-	}
+	const siteURL = "https://ptt.luan.com.tw"
 
 	// Check if email already registered
 	existingAcc, err := accountRepo.FindByEmail(email)
@@ -314,7 +310,7 @@ func handleEmailInput(chatID int64, email string) {
 		// Sync subscriptions to Redis
 		go (&account.RedisSync{}).SyncAllSubscriptions(existingAcc.ID)
 
-		SendTextMessage(chatID, "✅ 綁定成功！\n\n🔗 前往網站管理訂閱："+webappURL)
+		SendTextMessage(chatID, "✅ 綁定成功！\n\n🔗 前往網站管理訂閱："+siteURL)
 		return
 	}
 
@@ -350,7 +346,7 @@ func handleEmailInput(chatID int64, email string) {
 		"📧 Email: " + email + "\n" +
 		"🔑 臨時密碼: " + password + "\n\n" +
 		"⚠️ 請記得至網頁修改密碼\n" +
-		"🔗 " + webappURL
+		"🔗 " + siteURL
 	SendTextMessage(chatID, successMsg)
 }
 
