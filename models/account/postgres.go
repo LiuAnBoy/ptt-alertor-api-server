@@ -211,6 +211,20 @@ func (p *Postgres) Update(id int, role string, enabled bool) error {
 	return err
 }
 
+// UpdatePassword updates user password
+func (p *Postgres) UpdatePassword(id int, passwordHash string) error {
+	ctx := context.Background()
+	pool := connections.Postgres()
+
+	_, err := pool.Exec(ctx, `
+		UPDATE users
+		SET password_hash = $1
+		WHERE id = $2
+	`, passwordHash, id)
+
+	return err
+}
+
 // Delete deletes an account
 func (p *Postgres) Delete(id int) error {
 	ctx := context.Background()

@@ -192,6 +192,61 @@ func Me(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+// ChangePasswordRequest represents change password request body
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+// ChangePassword handles password change for authenticated users
+func ChangePassword(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	claims := auth.GetUserFromContext(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Success: false, Message: "未授權"})
+		return
+	}
+
+	var req ChangePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "無效的請求內容"})
+		return
+	}
+
+	// Validate new password
+	if len(req.NewPassword) < 6 {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "新密碼必須至少 6 個字元"})
+		return
+	}
+
+	// Get current account
+	acc, err := accountRepo.FindByID(claims.UserID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, ErrorResponse{Success: false, Message: "找不到帳號"})
+		return
+	}
+
+	// Verify current password
+	if !auth.CheckPassword(req.CurrentPassword, acc.Password) {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Success: false, Message: "目前密碼不正確"})
+		return
+	}
+
+	// Hash new password
+	hash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "密碼加密失敗"})
+		return
+	}
+
+	// Update password
+	if err := accountRepo.UpdatePassword(claims.UserID, hash); err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Success: false, Message: "密碼變更失敗"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "密碼變更成功"})
+}
+
 // GenerateBindCodeRequest represents a request to generate bind code
 type GenerateBindCodeRequest struct {
 	Service string `json:"service"`

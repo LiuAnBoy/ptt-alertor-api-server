@@ -93,6 +93,7 @@ func main() {
 	router.POST("/api/auth/register", api.Register)
 	router.POST("/api/auth/login", api.Login)
 	router.GET("/api/auth/me", auth.JWTAuth(api.Me))
+	router.PUT("/api/auth/password", auth.JWTAuth(api.ChangePassword))
 
 	// API v1 - Notification bindings
 	router.GET("/api/bindings", auth.JWTAuth(api.GetAllBindings))
