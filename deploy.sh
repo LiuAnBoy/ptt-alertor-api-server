@@ -21,13 +21,38 @@ if [ "$1" = "update" ]; then
     echo "=========================================="
     echo ""
 
-    echo "[1/3] Pulling latest code..."
+    echo "[1/4] Pulling latest code..."
+    OLD_COMMIT=$(git rev-parse HEAD)
     git pull
+    NEW_COMMIT=$(git rev-parse HEAD)
 
-    echo "[2/3] Rebuilding and restarting API container (DB & Redis stay running)..."
+    # Check for new migration files (exclude init.sql)
+    MIGRATION_FILES=$(git diff --name-only "$OLD_COMMIT" "$NEW_COMMIT" -- 'migrations/*.sql' | grep -v 'init.sql' || true)
+
+    echo "[2/4] Rebuilding and restarting API container (DB & Redis stay running)..."
     docker compose up -d --build --no-deps api
 
-    echo "[3/3] Waiting for API to be ready..."
+    echo "[3/4] Running new migrations..."
+    if [ -n "$MIGRATION_FILES" ]; then
+        # Wait for postgres to be ready
+        until docker compose exec -T postgres pg_isready -U ${PG_USER:-admin} -d ${PG_DATABASE:-ptt_alertor} > /dev/null 2>&1; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+        done
+
+        # Run each new migration file
+        for sql_file in $MIGRATION_FILES; do
+            if [ -f "$sql_file" ]; then
+                echo "Running: $sql_file"
+                docker compose exec -T postgres psql -U ${PG_USER:-admin} -d ${PG_DATABASE:-ptt_alertor} -f "/docker-entrypoint-initdb.d/$(basename $sql_file)"
+            fi
+        done
+        echo "✅ Migrations completed"
+    else
+        echo "No new migrations found"
+    fi
+
+    echo "[4/4] Waiting for API to be ready..."
     sleep 3
 
     echo ""
