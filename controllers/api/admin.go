@@ -12,6 +12,8 @@ import (
 	"github.com/julienschmidt/httprouter"
 )
 
+var redisSync = &account.RedisSync{}
+
 // UpdateUserRequest represents an admin user update request
 type UpdateUserRequest struct {
 	Role    string `json:"role"`

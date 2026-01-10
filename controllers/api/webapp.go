@@ -10,9 +10,12 @@ import (
 
 	"github.com/Ptt-Alertor/ptt-alertor/auth"
 	"github.com/Ptt-Alertor/ptt-alertor/channels/telegram"
+	"github.com/Ptt-Alertor/ptt-alertor/models/account"
 	"github.com/Ptt-Alertor/ptt-alertor/models/binding"
 	"github.com/julienschmidt/httprouter"
 )
+
+var webappRedisSync = &account.RedisSync{}
 
 // TelegramWebAppRequest represents a request from Telegram Web App
 type TelegramWebAppRequest struct {
@@ -77,7 +80,7 @@ func TelegramWebAppConfirm(w http.ResponseWriter, r *http.Request, _ httprouter.
 	}
 
 	// Sync existing subscriptions to Redis after binding
-	go redisSync.SyncAllSubscriptions(claims.UserID)
+	go webappRedisSync.SyncAllSubscriptions(claims.UserID)
 
 	// Send success message to Telegram
 	telegram.SendTextMessage(chatID, "綁定成功！您現在可以在網頁上管理訂閱，通知將發送到此 Telegram。")

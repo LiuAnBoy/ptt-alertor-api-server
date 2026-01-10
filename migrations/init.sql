@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     id            SERIAL PRIMARY KEY,
     user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     board         VARCHAR(50) NOT NULL,
-    sub_type      VARCHAR(20) NOT NULL CHECK (sub_type IN ('keyword', 'author', 'pushsum')),
+    sub_type      VARCHAR(20) NOT NULL CHECK (sub_type IN ('keyword', 'author', 'pushsum', 'article')),
     value         VARCHAR(255) NOT NULL,
     enabled       BOOLEAN DEFAULT TRUE,
     mail_subject  VARCHAR(100),

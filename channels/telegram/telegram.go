@@ -3,6 +3,7 @@ package telegram
 import (
 	"encoding/json"
 	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 
 	log "github.com/Ptt-Alertor/logrus"
 	"github.com/gomodule/redigo/redis"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Ptt-Alertor/ptt-alertor/command"
 	"github.com/Ptt-Alertor/ptt-alertor/connections"
@@ -131,8 +133,12 @@ func handleCommand(update tgbotapi.Update) {
 			code := strings.TrimPrefix(args, "BIND_")
 			responseText = handleBindCode(code, chatID)
 		} else {
-			command.HandleTelegramFollow(userID, chatID)
-			responseText = "歡迎使用 Ptt Alertor\n輸入「指令」查看相關功能。\n\n觀看Demo:\nhttps://media.giphy.com/media/3ohzdF6vidM6I49lQs/giphy.gif"
+			responseText = "歡迎使用 PTT Alertor！\n\n" +
+				"📌 如何開始：\n" +
+				"1. 前往網站註冊/登入\n" +
+				"2. 使用 /bind 綁定帳號\n\n" +
+				"🔗 網站：https://ptt.luan.com.tw\n\n" +
+				"輸入 /help 查看更多指令"
 		}
 	case "help":
 		responseText = command.HandleCommand("help", userID, true)
@@ -143,8 +149,8 @@ func handleCommand(update tgbotapi.Update) {
 	case "bind":
 		args := update.Message.CommandArguments()
 		if args == "" {
-			// No arguments - send Web App button for binding
-			sendWebAppBindButton(chatID)
+			// Check if already bound
+			handleBindCommand(chatID)
 			return
 		}
 		// Has arguments - legacy bind code flow from Dashboard
@@ -162,9 +168,12 @@ func handleCommand(update tgbotapi.Update) {
 }
 
 var bindingRepo = &binding.Postgres{}
+var accountRepo = &account.Postgres{}
 
 const webAppBindTokenPrefix = "webapp:bind:"
 const webAppBindTokenExpiry = 600 // 10 minutes
+const waitingEmailPrefix = "telegram:waiting_email:"
+const waitingEmailExpiry = 300 // 5 minutes
 
 // sendWebAppBindButton sends a Web App button for account binding
 func sendWebAppBindButton(chatID int64) {
@@ -266,11 +275,179 @@ func handleBindCode(args string, chatID int64) string {
 	return "綁定成功！您現在可以在網頁上管理訂閱，通知將發送到此 Telegram。"
 }
 
+// handleBindCommand handles /bind command - check if bound or ask for email
+func handleBindCommand(chatID int64) {
+	chatIDStr := strconv.FormatInt(chatID, 10)
+
+	// Check if already bound
+	existingBinding, err := bindingRepo.FindByServiceID(binding.ServiceTelegram, chatIDStr)
+	if err == nil && existingBinding != nil {
+		// Already bound - get account info
+		acc, err := accountRepo.FindByID(existingBinding.UserID)
+		if err == nil {
+			SendTextMessage(chatID, "✅ 已綁定帳號："+acc.Email)
+			return
+		}
+	}
+
+	// Not bound - ask for email
+	conn := connections.Redis()
+	defer conn.Close()
+
+	// Set waiting state in Redis
+	key := waitingEmailPrefix + chatIDStr
+	_, err = conn.Do("SETEX", key, waitingEmailExpiry, "1")
+	if err != nil {
+		log.WithError(err).Error("Failed to set waiting email state")
+		SendTextMessage(chatID, "發生錯誤，請稍後再試")
+		return
+	}
+
+	SendTextMessage(chatID, "請輸入您的 Email：")
+}
+
+// isWaitingForEmail checks if chatID is waiting for email input
+func isWaitingForEmail(chatID int64) bool {
+	conn := connections.Redis()
+	defer conn.Close()
+
+	key := waitingEmailPrefix + strconv.FormatInt(chatID, 10)
+	exists, err := redis.Bool(conn.Do("EXISTS", key))
+	if err != nil {
+		return false
+	}
+	return exists
+}
+
+// clearWaitingEmail clears the waiting email state
+func clearWaitingEmail(chatID int64) {
+	conn := connections.Redis()
+	defer conn.Close()
+
+	key := waitingEmailPrefix + strconv.FormatInt(chatID, 10)
+	conn.Do("DEL", key)
+}
+
+// handleEmailInput handles email input for registration and binding
+func handleEmailInput(chatID int64, email string) {
+	chatIDStr := strconv.FormatInt(chatID, 10)
+
+	// Clear waiting state
+	clearWaitingEmail(chatID)
+
+	// Validate email format
+	if !isValidEmail(email) {
+		SendTextMessage(chatID, "❌ Email 格式不正確，請重新輸入 /bind")
+		return
+	}
+
+	// Get webapp URL for messages
+	webappURL := os.Getenv("WEBAPP_URL")
+	if webappURL == "" {
+		webappURL = "https://ptt.luan.com.tw"
+	}
+
+	// Check if email already registered
+	existingAcc, err := accountRepo.FindByEmail(email)
+	if err == nil && existingAcc != nil {
+		// Email exists - check if this account is already bound to another Telegram
+		existingBinding, _ := bindingRepo.FindByUserAndService(existingAcc.ID, binding.ServiceTelegram)
+		if existingBinding != nil && existingBinding.ServiceID != "" {
+			// Already bound to another Telegram
+			SendTextMessage(chatID, "❌ 此帳號已綁定其他 Telegram")
+			return
+		}
+
+		// Account exists but not bound - bind it
+		SendTextMessage(chatID, "已有帳號，為您綁定中...")
+
+		// Create or update binding
+		if existingBinding != nil {
+			// Binding record exists but no service ID - update it
+			err = bindingRepo.ConfirmBinding(existingAcc.ID, binding.ServiceTelegram, chatIDStr)
+		} else {
+			// No binding record - create new
+			_, err = bindingRepo.Create(existingAcc.ID, binding.ServiceTelegram, chatIDStr)
+		}
+
+		if err != nil {
+			log.WithError(err).Error("Failed to bind existing account")
+			SendTextMessage(chatID, "❌ 綁定失敗，請稍後再試")
+			return
+		}
+
+		// Sync subscriptions to Redis
+		go (&account.RedisSync{}).SyncAllSubscriptions(existingAcc.ID)
+
+		SendTextMessage(chatID, "✅ 綁定成功！\n\n🔗 前往網站管理訂閱："+webappURL)
+		return
+	}
+
+	// New user - create account
+	password := generateRandomPassword()
+
+	// Hash password
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		log.WithError(err).Error("Failed to hash password")
+		SendTextMessage(chatID, "❌ 建立帳號失敗，請稍後再試")
+		return
+	}
+
+	// Create account
+	newAcc, err := accountRepo.Create(email, string(passwordHash), "user")
+	if err != nil {
+		log.WithError(err).Error("Failed to create account")
+		SendTextMessage(chatID, "❌ 建立帳號失敗，請稍後再試")
+		return
+	}
+
+	// Create binding
+	_, err = bindingRepo.Create(newAcc.ID, binding.ServiceTelegram, chatIDStr)
+	if err != nil {
+		log.WithError(err).Error("Failed to create binding")
+		SendTextMessage(chatID, "❌ 綁定失敗，請稍後再試")
+		return
+	}
+
+	// Send success message
+	successMsg := "✅ 帳號建立成功！\n\n" +
+		"📧 Email: " + email + "\n" +
+		"🔑 臨時密碼: " + password + "\n\n" +
+		"⚠️ 請記得至網頁修改密碼\n" +
+		"🔗 " + webappURL
+	SendTextMessage(chatID, successMsg)
+}
+
+// isValidEmail validates email format
+func isValidEmail(email string) bool {
+	pattern := `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`
+	matched, _ := regexp.MatchString(pattern, email)
+	return matched
+}
+
+// generateRandomPassword generates a random 6-letter password
+func generateRandomPassword() string {
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	result := make([]byte, 6)
+	for i := range result {
+		result[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(result)
+}
+
 func handleText(update tgbotapi.Update) {
 	var responseText string
 	userID := strconv.FormatInt(update.Message.From.ID, 10)
 	chatID := update.Message.Chat.ID
 	text := update.Message.Text
+
+	// Check if waiting for email input
+	if isWaitingForEmail(chatID) {
+		handleEmailInput(chatID, strings.TrimSpace(text))
+		return
+	}
+
 	if match, _ := regexp.MatchString("^(刪除|刪除作者)+\\s.*\\*+", text); match {
 		sendConfirmation(chatID, text)
 		return

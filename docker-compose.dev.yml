@@ -1,6 +1,11 @@
+# Development environment with hot reload
+# Usage: docker compose -f docker-compose.dev.yml up
+
 services:
-  api_dev:
-    build: .
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     container_name: ptt_alertor_api_dev
     ports:
       - "9090:9090"
@@ -8,16 +13,19 @@ services:
     env_file:
       - .env
     environment:
-      - PG_HOST=postgres_dev
-      - REDIS_HOST=redis_dev
+      - PG_HOST=postgres
+      - REDIS_HOST=redis
+    volumes:
+      - .:/app
+      - go_mod_cache:/go/pkg/mod
     depends_on:
-      postgres_dev:
+      postgres:
         condition: service_healthy
-      redis_dev:
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
-  postgres_dev:
+  postgres:
     image: postgres:15-alpine
     container_name: ptt_alertor_postgres_dev
     env_file:
@@ -38,7 +46,7 @@ services:
       retries: 5
     restart: unless-stopped
 
-  redis_dev:
+  redis:
     image: redis:7-alpine
     container_name: ptt_alertor_redis_dev
     env_file:
@@ -57,3 +65,4 @@ services:
 volumes:
   postgres_dev_data:
   redis_dev_data:
+  go_mod_cache:

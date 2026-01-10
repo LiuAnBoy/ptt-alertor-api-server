@@ -4,31 +4,25 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 
+	log "github.com/Ptt-Alertor/logrus"
 	"github.com/Ptt-Alertor/ptt-alertor/models"
 	"github.com/Ptt-Alertor/ptt-alertor/models/account"
+	"github.com/Ptt-Alertor/ptt-alertor/models/article"
+	"github.com/Ptt-Alertor/ptt-alertor/models/top"
 	"github.com/Ptt-Alertor/ptt-alertor/myutil"
 	"github.com/Ptt-Alertor/ptt-alertor/ptt/web"
-
-	"fmt"
-
-	log "github.com/Ptt-Alertor/logrus"
-	"github.com/Ptt-Alertor/ptt-alertor/models/article"
-	"github.com/Ptt-Alertor/ptt-alertor/models/board"
-	"github.com/Ptt-Alertor/ptt-alertor/models/subscription"
-	"github.com/Ptt-Alertor/ptt-alertor/models/top"
-	"github.com/Ptt-Alertor/ptt-alertor/models/user"
 )
 
 const subArticlesLimit int = 50
-const defaultMaxSubscriptions int = 3
 const updateFailedMsg string = "失敗，請嘗試封鎖再解封鎖，並重新執行註冊步驟。\n若問題未解決，請至粉絲團或 LINE 首頁留言。"
-const subscriptionLimitMsg string = "已達訂閱上限"
 
-var roleLimitRepo = &account.RoleLimitPostgres{}
+var subscriptionRepo = &account.SubscriptionPostgres{}
+var accountRepoCmd = &account.Postgres{}
 
 var inputErrorTips = []string{
 	"指令格式錯誤。",
@@ -65,19 +59,8 @@ var Commands = map[string]map[string]string{
 		"範例":      "新增推文 https://www.ptt.cc/bbs/EZsoft/M.1497363598.A.74E.html",
 	},
 	"進階應用": {
-		"參考連結": "https://pttalertor.dinolai.com/docs",
+		"參考連結": "https://ptt.luan.com.tw/docs",
 	},
-}
-
-var commandActionMap = map[string]updateAction{
-	"新增":    addKeywords,
-	"刪除":    removeKeywords,
-	"新增作者":  addAuthors,
-	"刪除作者":  removeAuthors,
-	"新增推文":  addArticles,
-	"刪除推文":  removeArticles,
-	"新增推文數": updatePushUp,
-	"新增噓文數": updatePushDown,
 }
 
 // HandleCommand handles command from chatbot
@@ -276,39 +259,85 @@ func handleDebug(account string) string {
 	return models.User().Find(account).Profile.Account
 }
 
-func handleList(account string) string {
-	subs := models.User().Find(account).Subscribes
-	if len(subs) == 0 {
-		return "尚未建立清單。請打「指令」查看新增方法。"
+func handleList(chatID string) string {
+	// Get PostgreSQL userID from chatID
+	userID, err := account.GetUserIDByTelegramChatID(chatID)
+	if err != nil {
+		if errors.Is(err, account.ErrUserNotBound) {
+			return "請先綁定帳號，輸入 /bind"
+		}
+		log.WithError(err).Error("Failed to get userID from chatID")
+		return "取得用戶資料失敗"
 	}
-	return subs.String()
+
+	result, err := subscriptionRepo.ListFormatted(userID)
+	if err != nil {
+		log.WithError(err).Error("Failed to get subscription list")
+		return "取得訂閱列表失敗"
+	}
+	return result
 }
 
-func cleanCommentList(account string) string {
-	var i int
-	for _, sub := range models.User().Find(account).Subscribes {
-		for _, code := range sub.Articles {
-			article := models.Article()
-			article.Code = code
-			bl, err := article.Exist()
-			if err != nil {
-				return "清理推文失敗，請洽至粉絲團或 LINE 首頁留言。"
-			}
-			if !bl {
-				update(removeArticles, account, []string{sub.Board}, code)
-				i++
-			}
+func cleanCommentList(chatID string) string {
+	// Get PostgreSQL userID from chatID
+	userID, err := account.GetUserIDByTelegramChatID(chatID)
+	if err != nil {
+		if errors.Is(err, account.ErrUserNotBound) {
+			return "請先綁定帳號，輸入 /bind"
+		}
+		return "取得用戶資料失敗"
+	}
+
+	// Get all article subscriptions
+	subs, err := subscriptionRepo.ListByUserIDAndType(userID, "article")
+	if err != nil {
+		return "取得推文清單失敗"
+	}
+
+	var cleaned int
+	for _, sub := range subs {
+		a := models.Article()
+		a.Code = sub.Value
+		exists, err := a.Exist()
+		if err != nil {
+			continue
+		}
+		if !exists {
+			// Delete invalid article subscription
+			subscriptionRepo.Delete(sub.ID, userID)
+			cleaned++
 		}
 	}
-	return fmt.Sprintf("清理 %d 則推文", i)
+	return fmt.Sprintf("清理 %d 則推文", cleaned)
 }
 
-func handleCommentList(account string) string {
-	subs := models.User().Find(account).Subscribes
-	if len(subs) == 0 {
-		return "尚未建立清單。請打「指令」查看新增方法。"
+func handleCommentList(chatID string) string {
+	// Get PostgreSQL userID from chatID
+	userID, err := account.GetUserIDByTelegramChatID(chatID)
+	if err != nil {
+		if errors.Is(err, account.ErrUserNotBound) {
+			return "請先綁定帳號，輸入 /bind"
+		}
+		return "取得用戶資料失敗"
 	}
-	return "推文追蹤清單，上限 50 篇：\n" + subs.StringCommentList() + "\n輸入「清理推文」，可刪除無效連結。"
+
+	// Get all article subscriptions
+	subs, err := subscriptionRepo.ListByUserIDAndType(userID, "article")
+	if err != nil {
+		return "取得推文清單失敗"
+	}
+
+	if len(subs) == 0 {
+		return "尚未追蹤任何文章。"
+	}
+
+	var result strings.Builder
+	result.WriteString("推文追蹤清單，上限 50 篇：\n")
+	for _, sub := range subs {
+		result.WriteString(fmt.Sprintf("- %s: %s\n", sub.Board, sub.Value))
+	}
+	result.WriteString("\n輸入「清理推文」，可刪除無效連結。")
+	return result.String()
 }
 
 func stringCommands() string {
@@ -340,211 +369,318 @@ func listTop() string {
 	for i, pushSum := range top.ListPushSum(5) {
 		content += fmt.Sprintf("\n%d. %s", i+1, pushSum)
 	}
-	content += "\n\nTOP 100:\nhttp://pttalertor.dinolai.com/top"
+	content += "\n\nTOP 100:\nhttps://ptt.luan.com.tw/top"
 	return content
 }
 
-// countSubscriptions counts the total number of subscriptions for a user
-func countSubscriptions(userID string) int {
-	u := models.User().Find(userID)
-	count := 0
-	for _, sub := range u.Subscribes {
-		if len(sub.Keywords) > 0 {
-			count++
+func handleKeyword(command, chatID, boardStr, keywordStr string) (string, error) {
+	// Get PostgreSQL userID from chatID
+	userID, err := account.GetUserIDByTelegramChatID(chatID)
+	if err != nil {
+		if errors.Is(err, account.ErrUserNotBound) {
+			return "", errors.New("請先綁定帳號，輸入 /bind")
 		}
-		if len(sub.Authors) > 0 {
-			count++
-		}
-		if sub.PushSum.Up != 0 || sub.PushSum.Down != 0 {
-			count++
-		}
-	}
-	return count
-}
-
-// getMaxSubscriptionsForUser returns the max subscription limit for a user
-// by looking up their role through notification bindings (telegram/line)
-func getMaxSubscriptionsForUser(userID string) int {
-	// Try to find by telegram first
-	maxSubs, err := roleLimitRepo.GetMaxSubscriptionsByServiceID("telegram", userID)
-	if err == nil && maxSubs != defaultMaxSubscriptions {
-		return maxSubs
+		return "", errors.New("取得用戶資料失敗")
 	}
 
-	// Try LINE if telegram not found
-	maxSubs, err = roleLimitRepo.GetMaxSubscriptionsByServiceID("line", userID)
-	if err == nil {
-		return maxSubs
+	// Get account for role check
+	acc, err := accountRepoCmd.FindByID(userID)
+	if err != nil {
+		return "", errors.New("取得帳號資料失敗")
 	}
 
-	return defaultMaxSubscriptions
-}
+	isAdd := strings.HasPrefix(command, "新增")
 
-// checkSubscriptionLimit checks if user has reached subscription limit
-func checkSubscriptionLimit(userID string, isAddCommand bool) error {
-	if !isAddCommand {
-		return nil
-	}
-
-	maxSubs := getMaxSubscriptionsForUser(userID)
-
-	// -1 means unlimited
-	if maxSubs < 0 {
-		return nil
-	}
-
-	if countSubscriptions(userID) >= maxSubs {
-		return errors.New(subscriptionLimitMsg)
-	}
-	return nil
-}
-
-func handleKeyword(command, userID, board, keywordStr string) (string, error) {
 	// Check subscription limit for add commands
-	if strings.HasPrefix(command, "新增") {
-		if err := checkSubscriptionLimit(userID, true); err != nil {
-			return "", err
+	if isAdd {
+		if err := subscriptionRepo.CheckLimit(userID, acc.Role); err != nil {
+			if errors.Is(err, account.ErrSubscriptionLimitReached) {
+				return "", errors.New("已達訂閱上限")
+			}
+			return "", errors.New("檢查訂閱限制失敗")
 		}
 	}
 
-	boardNames := splitParamString(board)
-	input := keywordStr
-	var inputs []string
-	if strings.HasPrefix(input, "regexp:") {
-		if !checkRegexp(input) {
+	boardNames := splitParamString(boardStr)
+	var keywords []string
+	if strings.HasPrefix(keywordStr, "regexp:") {
+		if !checkRegexp(keywordStr) {
 			return "", errors.New("正規表示式錯誤，請檢查規則。")
 		}
-		inputs = []string{keywordStr}
+		keywords = []string{keywordStr}
 	} else {
-		inputs = splitParamString(keywordStr)
+		keywords = splitParamString(keywordStr)
 	}
+
 	log.WithFields(log.Fields{
-		"id":      userID,
+		"id":      chatID,
+		"userID":  userID,
 		"command": command,
 		"boards":  boardNames,
-		"words":   inputs,
+		"words":   keywords,
 	}).Info("Keyword Command")
-	err := update(commandActionMap[command], userID, boardNames, inputs...)
-	if msg, ok := checkBoardError(err); ok {
-		return "", errors.New(msg)
-	}
-	if err != nil {
-		// Check for specific subscription errors
-		if errors.Is(err, subscription.ErrKeywordNotFound) ||
-			errors.Is(err, subscription.ErrBoardNotSubscribed) {
-			return "", err
+
+	// Process each board and keyword combination
+	for _, boardName := range boardNames {
+		for _, kw := range keywords {
+			if isAdd {
+				_, err := subscriptionRepo.Create(userID, boardName, "keyword", kw)
+				if err != nil {
+					if errors.Is(err, account.ErrSubscriptionExists) {
+						continue // Skip if already exists
+					}
+					if errors.Is(err, account.ErrBoardNotFound) {
+						return "", errors.New("板名錯誤，請確認拼字。")
+					}
+					if errors.Is(err, account.ErrSubscriptionLimitReached) {
+						return "", errors.New("已達訂閱上限")
+					}
+					log.WithError(err).Error("Keyword Create Failed")
+					return "", errors.New(command + updateFailedMsg)
+				}
+			} else {
+				err := subscriptionRepo.DeleteByValue(userID, boardName, "keyword", kw)
+				if err != nil {
+					if errors.Is(err, account.ErrSubscriptionNotFound) {
+						continue // Skip if not found
+					}
+					log.WithError(err).Error("Keyword Delete Failed")
+					return "", errors.New(command + updateFailedMsg)
+				}
+			}
 		}
-		log.WithError(err).Error("Keyword Command Failed")
-		return "", errors.New(command + updateFailedMsg)
 	}
+
 	return command + "成功", nil
 }
 
-func handleAuthor(command, userID, board, authorStr string) (string, error) {
+func handleAuthor(command, chatID, boardStr, authorStr string) (string, error) {
+	// Get PostgreSQL userID from chatID
+	userID, err := account.GetUserIDByTelegramChatID(chatID)
+	if err != nil {
+		if errors.Is(err, account.ErrUserNotBound) {
+			return "", errors.New("請先綁定帳號，輸入 /bind")
+		}
+		return "", errors.New("取得用戶資料失敗")
+	}
+
+	// Get account for role check
+	acc, err := accountRepoCmd.FindByID(userID)
+	if err != nil {
+		return "", errors.New("取得帳號資料失敗")
+	}
+
+	isAdd := strings.HasPrefix(command, "新增")
+
 	// Check subscription limit for add commands
-	if strings.HasPrefix(command, "新增") {
-		if err := checkSubscriptionLimit(userID, true); err != nil {
-			return "", err
+	if isAdd {
+		if err := subscriptionRepo.CheckLimit(userID, acc.Role); err != nil {
+			if errors.Is(err, account.ErrSubscriptionLimitReached) {
+				return "", errors.New("已達訂閱上限")
+			}
+			return "", errors.New("檢查訂閱限制失敗")
 		}
 	}
 
 	if ok, _ := regexp.MatchString("^(\\*|[\\s,\\w]+)$", authorStr); !ok {
 		return "", errors.New("作者為半形英文與數字組成。")
 	}
-	boardNames := splitParamString(board)
+
+	boardNames := splitParamString(boardStr)
 	authors := splitParamString(authorStr)
+
 	log.WithFields(log.Fields{
-		"id":      userID,
+		"id":      chatID,
+		"userID":  userID,
 		"command": command,
 		"boards":  boardNames,
 		"words":   authors,
 	}).Info("Author Command")
-	err := update(commandActionMap[command], userID, boardNames, authors...)
-	if msg, ok := checkBoardError(err); ok {
-		return "", errors.New(msg)
-	}
-	if err != nil {
-		// Check for specific subscription errors
-		if errors.Is(err, subscription.ErrAuthorNotFound) ||
-			errors.Is(err, subscription.ErrBoardNotSubscribed) {
-			return "", err
+
+	// Process each board and author combination
+	for _, boardName := range boardNames {
+		for _, author := range authors {
+			if isAdd {
+				_, err := subscriptionRepo.Create(userID, boardName, "author", author)
+				if err != nil {
+					if errors.Is(err, account.ErrSubscriptionExists) {
+						continue // Skip if already exists
+					}
+					if errors.Is(err, account.ErrBoardNotFound) {
+						return "", errors.New("板名錯誤，請確認拼字。")
+					}
+					if errors.Is(err, account.ErrSubscriptionLimitReached) {
+						return "", errors.New("已達訂閱上限")
+					}
+					log.WithError(err).Error("Author Create Failed")
+					return "", errors.New(command + updateFailedMsg)
+				}
+			} else {
+				err := subscriptionRepo.DeleteByValue(userID, boardName, "author", author)
+				if err != nil {
+					if errors.Is(err, account.ErrSubscriptionNotFound) {
+						continue // Skip if not found
+					}
+					log.WithError(err).Error("Author Delete Failed")
+					return "", errors.New(command + updateFailedMsg)
+				}
+			}
 		}
-		log.WithError(err).Error("Author Command Failed")
-		return "", errors.New(command + updateFailedMsg)
 	}
+
 	return command + "成功", nil
 }
 
-func handlePushSum(command, account, board, sumStr string) (string, error) {
-	// Check subscription limit for add commands
-	if strings.HasPrefix(command, "新增") {
-		if err := checkSubscriptionLimit(account, true); err != nil {
-			return "", err
+func handlePushSum(command, chatID, boardStr, sumStr string) (string, error) {
+	// Get PostgreSQL userID from chatID
+	userID, err := account.GetUserIDByTelegramChatID(chatID)
+	if err != nil {
+		if errors.Is(err, account.ErrUserNotBound) {
+			return "", errors.New("請先綁定帳號，輸入 /bind")
+		}
+		return "", errors.New("取得用戶資料失敗")
+	}
+
+	// Get account for role check
+	acc, err := accountRepoCmd.FindByID(userID)
+	if err != nil {
+		return "", errors.New("取得帳號資料失敗")
+	}
+
+	// Check subscription limit for add commands (pushsum 0 means delete)
+	sum, err := strconv.Atoi(sumStr)
+	if err != nil || sum < 0 || sum > 100 {
+		return "", errors.New("推噓文數需為介於 0-100 的數字")
+	}
+
+	isAdd := sum > 0
+	if isAdd {
+		if err := subscriptionRepo.CheckLimit(userID, acc.Role); err != nil {
+			if errors.Is(err, account.ErrSubscriptionLimitReached) {
+				return "", errors.New("已達訂閱上限")
+			}
+			return "", errors.New("檢查訂閱限制失敗")
 		}
 	}
 
-	if sum, err := strconv.Atoi(sumStr); err != nil || sum < 0 || sum > 100 {
-		return "", errors.New("推噓文數需為介於 0-100 的數字")
-	}
-	boardNames := splitParamString(board)
-	log.WithFields(log.Fields{
-		"id":      account,
-		"command": command,
-		"boards":  boardNames,
-		"words":   sumStr,
-	}).Info("PushSum Command")
+	boardNames := splitParamString(boardStr)
+
 	for _, boardName := range boardNames {
 		if strings.EqualFold(boardName, "allpost") {
 			return "", errors.New("推文數通知不支持 ALLPOST 板。")
 		}
 	}
-	err := update(commandActionMap[command], account, boardNames, sumStr)
-	if msg, ok := checkBoardError(err); ok {
-		return "", errors.New(msg)
+
+	// Determine sub_type based on command
+	subType := "pushsum"
+	var value string
+	if strings.Contains(command, "推文數") {
+		value = "+" + sumStr // up pushsum
+	} else {
+		value = "-" + sumStr // down pushsum (boo)
 	}
-	if err != nil {
-		// Check for specific subscription errors
-		if errors.Is(err, subscription.ErrBoardNotSubscribed) {
-			return "", err
+
+	log.WithFields(log.Fields{
+		"id":      chatID,
+		"userID":  userID,
+		"command": command,
+		"boards":  boardNames,
+		"value":   value,
+	}).Info("PushSum Command")
+
+	// Process each board
+	for _, boardName := range boardNames {
+		if isAdd {
+			// Create or update pushsum subscription
+			_, err := subscriptionRepo.Create(userID, boardName, subType, value)
+			if err != nil {
+				if errors.Is(err, account.ErrSubscriptionExists) {
+					// Update existing pushsum subscription
+					// For pushsum, we need to find and update the existing one
+					continue // For simplicity, skip if exists (user should delete first)
+				}
+				if errors.Is(err, account.ErrBoardNotFound) {
+					return "", errors.New("板名錯誤，請確認拼字。")
+				}
+				if errors.Is(err, account.ErrSubscriptionLimitReached) {
+					return "", errors.New("已達訂閱上限")
+				}
+				log.WithError(err).Error("PushSum Create Failed")
+				return "", errors.New(command + updateFailedMsg)
+			}
+		} else {
+			// Delete pushsum subscription (sum == 0)
+			err := subscriptionRepo.DeleteByValue(userID, boardName, subType, value)
+			if err != nil {
+				if errors.Is(err, account.ErrSubscriptionNotFound) {
+					continue // Skip if not found
+				}
+				log.WithError(err).Error("PushSum Delete Failed")
+				return "", errors.New(command + updateFailedMsg)
+			}
 		}
-		log.WithError(err).Error("PushSum Command Failed")
-		return "", errors.New(command + updateFailedMsg)
 	}
+
 	return command + "成功", nil
 }
 
-func handleComment(command, userID, boardName, articleCode string) (string, error) {
+func handleComment(command, chatID, boardName, articleCode string) (string, error) {
+	// Get PostgreSQL userID from chatID
+	userID, err := account.GetUserIDByTelegramChatID(chatID)
+	if err != nil {
+		if errors.Is(err, account.ErrUserNotBound) {
+			return "", errors.New("請先綁定帳號，輸入 /bind")
+		}
+		return "", errors.New("取得用戶資料失敗")
+	}
+
 	log.WithFields(log.Fields{
-		"id":      userID,
+		"id":      chatID,
+		"userID":  userID,
 		"command": command,
-		"boards":  boardName,
-		"words":   articleCode,
+		"board":   boardName,
+		"article": articleCode,
 	}).Info("Comment Command")
-	if strings.EqualFold(command, "新增推文") {
+
+	isAdd := strings.EqualFold(command, "新增推文")
+
+	if isAdd {
+		// Check if article exists
 		if !checkArticleExist(boardName, articleCode) {
 			return "", errors.New("文章不存在")
 		}
-		if countUserArticles(userID) >= subArticlesLimit {
+		// Check article tracking limit (50)
+		count, err := subscriptionRepo.CountByUserIDAndType(userID, "article")
+		if err != nil {
+			log.WithError(err).Error("Failed to count article subscriptions")
+			return "", errors.New("檢查訂閱數量失敗")
+		}
+		if count >= subArticlesLimit {
 			return "", errors.New("推文追蹤最多 50 篇，輸入「推文清單」，整理追蹤列表。")
 		}
-	}
-	err := update(commandActionMap[command], userID, []string{boardName}, articleCode)
-	if err != nil {
-		// Check for specific subscription errors
-		if errors.Is(err, subscription.ErrBoardNotSubscribed) {
-			return "", err
-		}
-		log.WithError(err).Error("Comment Command Failed")
-		return "", errors.New(command + updateFailedMsg)
-	}
-	return command + "成功", nil
-}
 
-func countUserArticles(account string) (cnt int) {
-	for _, sub := range models.User().Find(account).Subscribes {
-		cnt += len(sub.Articles)
+		// Create article subscription
+		_, err = subscriptionRepo.Create(userID, boardName, "article", articleCode)
+		if err != nil {
+			if errors.Is(err, account.ErrSubscriptionExists) {
+				return "", errors.New("已追蹤此文章")
+			}
+			log.WithError(err).Error("Article Create Failed")
+			return "", errors.New(command + updateFailedMsg)
+		}
+	} else {
+		// Delete article subscription
+		err := subscriptionRepo.DeleteByValue(userID, boardName, "article", articleCode)
+		if err != nil {
+			if errors.Is(err, account.ErrSubscriptionNotFound) {
+				return "", errors.New("未追蹤此文章")
+			}
+			log.WithError(err).Error("Article Delete Failed")
+			return "", errors.New(command + updateFailedMsg)
+		}
 	}
-	return cnt
+
+	return command + "成功", nil
 }
 
 func checkArticleExist(boardName, articleCode string) bool {
@@ -574,12 +710,6 @@ func initialArticle(a *article.Article) error {
 	return a.Save()
 }
 
-func checkBoardError(err error) (string, bool) {
-	if bErr, ok := err.(board.BoardNotExistError); ok {
-		return "板名錯誤，請確認拼字。可能板名：\n" + bErr.Suggestion, true
-	}
-	return "", false
-}
 
 func checkRegexp(input string) bool {
 	pattern := strings.Replace(strings.TrimPrefix(input, "regexp:"), "//", "////", -1)
@@ -616,55 +746,3 @@ func splitParamString(paramString string) (params []string) {
 	return params
 }
 
-func update(action updateAction, account string, boardNames []string, inputs ...string) error {
-	u := models.User().Find(account)
-	if boardNames[0] == "**" {
-		boardNames = nil
-		for _, uSub := range u.Subscribes {
-			boardNames = append(boardNames, uSub.Board)
-		}
-	}
-	for _, boardName := range boardNames {
-		sub := subscription.Subscription{
-			Board: strings.ToLower(boardName),
-		}
-		err := action(&u, sub, inputs...)
-		if err != nil {
-			return err
-		}
-		err = u.Update()
-		if err != nil {
-			log.WithError(err).Error("Subscription Update Error")
-			return err
-		}
-	}
-	return nil
-}
-
-func HandleTelegramFollow(id string, chatID int64) error {
-	u := models.User().Find(id)
-	u.Profile.Telegram = id
-	u.Profile.TelegramChat = chatID
-	log.WithFields(log.Fields{
-		"id":       id,
-		"platform": "telegram",
-	}).Info("User Join")
-	return handleFollow(u)
-}
-
-func handleFollow(u user.User) error {
-	if u.Profile.Account != "" {
-		u.Enable = true
-		u.Update()
-	} else {
-		if u.Profile.Telegram != "" {
-			u.Profile.Account = u.Profile.Telegram
-		}
-		u.Enable = true
-		err := u.Save()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
