@@ -123,9 +123,6 @@ func handleCommand(update tgbotapi.Update) {
 	chatID := update.Message.Chat.ID
 
 	switch update.Message.Command() {
-	case "add", "del":
-		text := update.Message.Command() + " " + update.Message.CommandArguments()
-		responseText = command.HandleCommand(text, userID, true)
 	case "start":
 		args := update.Message.CommandArguments()
 		// Check if this is a bind request via deep link
@@ -170,70 +167,8 @@ func handleCommand(update tgbotapi.Update) {
 var bindingRepo = &binding.Postgres{}
 var accountRepo = &account.Postgres{}
 
-const webAppBindTokenPrefix = "webapp:bind:"
-const webAppBindTokenExpiry = 600 // 10 minutes
 const waitingEmailPrefix = "telegram:waiting_email:"
 const waitingEmailExpiry = 300 // 5 minutes
-
-// sendWebAppBindButton sends a Web App button for account binding
-func sendWebAppBindButton(chatID int64) {
-	// Generate token and store in Redis with chat_id
-	token, err := binding.GenerateBindCode()
-	if err != nil {
-		log.WithError(err).Error("Failed to generate webapp bind token")
-		SendTextMessage(chatID, "產生綁定連結失敗，請稍後再試")
-		return
-	}
-
-	// Store token -> chat_id in Redis
-	conn := connections.Redis()
-	defer conn.Close()
-
-	key := webAppBindTokenPrefix + token
-	_, err = conn.Do("SETEX", key, webAppBindTokenExpiry, chatID)
-	if err != nil {
-		log.WithError(err).Error("Failed to store webapp bind token")
-		SendTextMessage(chatID, "產生綁定連結失敗，請稍後再試")
-		return
-	}
-
-	// Build Web App URL
-	webappURL := os.Getenv("WEBAPP_URL")
-	if webappURL == "" {
-		webappURL = "http://localhost:3000"
-	}
-	webAppURL := webappURL + "/telegram/bind?token=" + token
-
-	// Send message with URL button (opens in browser)
-	msg := tgbotapi.NewMessage(chatID, "點擊下方按鈕登入並綁定帳號")
-	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonURL("🔗 登入綁定", webAppURL),
-		),
-	)
-
-	_, err = bot.Send(msg)
-	if err != nil {
-		log.WithError(err).Error("Failed to send Web App button")
-	}
-}
-
-// GetWebAppBindChatID retrieves chat_id from Redis by token
-func GetWebAppBindChatID(token string) (int64, error) {
-	conn := connections.Redis()
-	defer conn.Close()
-
-	key := webAppBindTokenPrefix + token
-	chatID, err := redis.Int64(conn.Do("GET", key))
-	if err != nil {
-		return 0, err
-	}
-
-	// Delete token after use
-	conn.Do("DEL", key)
-
-	return chatID, nil
-}
 
 // handleBindCode handles the /bind <code> command (legacy flow from Dashboard)
 func handleBindCode(args string, chatID int64) string {

@@ -101,9 +101,6 @@ func main() {
 	router.PATCH("/api/bindings/:service", auth.JWTAuth(api.SetBindingEnabled))
 	router.DELETE("/api/bindings/:service", auth.JWTAuth(api.UnbindService))
 
-	// API v1 - Telegram Web App binding
-	router.POST("/api/webapp/telegram/confirm", auth.JWTAuth(api.TelegramWebAppConfirm))
-
 	// API v1 - Subscriptions
 	router.GET("/api/subscriptions", auth.JWTAuth(api.ListSubscriptions))
 	router.POST("/api/subscriptions", auth.JWTAuth(api.CreateSubscription))
