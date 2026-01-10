@@ -170,7 +170,6 @@ func startJobs() {
 	go jobs.NewCommentChecker().Run()
 	go jobs.NewPttMonitor().Run()
 	c := cron.New()
-	c.AddJob("@hourly", jobs.NewTop())
 	c.AddJob("@hourly", jobs.NewCommentAggregator())
 	c.AddJob("@every 48h", jobs.NewPushSumKeyReplacer())
 	c.Start()
@@ -180,7 +179,6 @@ func init() {
 	// for initial app
 	// jobs.NewPushSumKeyReplacer().Run()
 	// jobs.NewMigrateBoard(map[string]string{}).Run()
-	// jobs.NewTop().Run()
 	// jobs.NewCacheCleaner().Run()
 	// jobs.NewGenerator().Run()
 	// jobs.NewFetcher().Run()

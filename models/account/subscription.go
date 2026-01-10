@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Ptt-Alertor/ptt-alertor/connections"
+	"github.com/Ptt-Alertor/ptt-alertor/models/top"
 	"github.com/Ptt-Alertor/ptt-alertor/ptt/rss"
 	"github.com/jackc/pgx/v5"
 )
@@ -26,7 +27,7 @@ var (
 	roleLimitRepoInternal = &RoleLimitPostgres{}
 	accountRepoInternal   = &Postgres{}
 	redisSyncInternal     = &RedisSync{}
-	statsRepoInternal     = &SubscriptionStatsPostgres{}
+	statsRepoInternal     = &top.Postgres{}
 )
 
 // MailTemplate represents the mail template for a subscription
@@ -158,7 +159,7 @@ func syncStats(board, subType, value string, increment bool) {
 
 	var values []string
 	if subType == "keyword" {
-		values = ParseKeywordValues(value)
+		values = parseKeywordValues(value)
 	} else {
 		values = []string{value}
 	}
@@ -170,6 +171,43 @@ func syncStats(board, subType, value string, increment bool) {
 	} else {
 		statsRepoInternal.DecrementBatch(board, subType, values)
 	}
+}
+
+// parseKeywordValues parses a keyword value and returns individual keywords
+func parseKeywordValues(value string) []string {
+	// Skip exclude patterns
+	if strings.HasPrefix(value, "!") {
+		return nil
+	}
+
+	// Handle regexp patterns: regexp:A|B|C -> [A, B, C]
+	if pattern, found := strings.CutPrefix(value, "regexp:"); found {
+		parts := strings.Split(pattern, "|")
+		var result []string
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				result = append(result, part)
+			}
+		}
+		return result
+	}
+
+	// Handle AND patterns: A&B -> [A, B]
+	if strings.Contains(value, "&") {
+		parts := strings.Split(value, "&")
+		var result []string
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				result = append(result, part)
+			}
+		}
+		return result
+	}
+
+	// Simple keyword
+	return []string{value}
 }
 
 // FindByID finds a subscription by ID

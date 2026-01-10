@@ -1,9 +1,7 @@
 package command
 
 import (
-	"bytes"
 	"errors"
-	"flag"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -14,7 +12,6 @@ import (
 	"github.com/Ptt-Alertor/ptt-alertor/models/account"
 	"github.com/Ptt-Alertor/ptt-alertor/models/article"
 	"github.com/Ptt-Alertor/ptt-alertor/models/top"
-	"github.com/Ptt-Alertor/ptt-alertor/myutil"
 	"github.com/Ptt-Alertor/ptt-alertor/ptt/web"
 )
 
@@ -159,100 +156,11 @@ func HandleCommand(text string, userID string, isUser bool) string {
 		return cleanCommentList(userID)
 	case "推文清單":
 		return handleCommentList(userID)
-	case "add", "del":
-		return handleCommandLine(userID, command, text)
 	}
 	if !isUser {
 		return ""
 	}
 	return "無此指令，請打「指令」查看指令清單"
-}
-
-func handleCommandLine(userID, command, text string) string {
-	var keywordStr, authorStr, push, boo string
-	cl := flag.NewFlagSet("Ptt Alertor: <add|del> <-flag <argument>> <board> [board...]\nexample: add -k ptt -a chodino -p 10 ezsoft", flag.ContinueOnError)
-	bf := new(bytes.Buffer)
-	cl.SetOutput(bf)
-	cl.StringVar(&keywordStr, "keyword", "", "keywords: <keyword>[,keyword...]")
-	cl.StringVar(&keywordStr, "k", "", "abbr. of keyword")
-	cl.StringVar(&authorStr, "author", "", "authors: <author>[,author...]")
-	cl.StringVar(&authorStr, "a", "", "abbr. of author")
-	cl.StringVar(&push, "push", "", "number of push's sum: <sum>")
-	cl.StringVar(&push, "p", "", "abbr. of push")
-	cl.StringVar(&boo, "boo", "", "number of boo's sum: <sum>")
-	cl.StringVar(&boo, "b", "", "abbr. of boo")
-
-	args := strings.Fields(text)
-	err := cl.Parse(args[1:])
-	boardStrs := cl.Args()
-	for i := 0; i < len(boardStrs); i++ {
-		boardStrs[i] = strings.TrimSpace(strings.Trim(boardStrs[i], ","))
-	}
-	boardStr := strings.Join(boardStrs, ",")
-	if bf.Len() != 0 {
-		return bf.String()
-	}
-	if cl.NFlag() == 0 {
-		return "未指定參數。輸入 " + command + " -h 查看參數列表。"
-	}
-	if boardStr == "" {
-		errorTips := []string{
-			"未指定板名。",
-			"範例：add -k ptt -a chodino -p 10 ezsoft",
-			"輸入 " + command + " -h 查看提示訊息。",
-		}
-		return strings.Join(errorTips, "\n")
-	}
-
-	log.WithField("command", text).Info("Command Line Request")
-
-	var commandPrefix string
-	switch command {
-	case "add":
-		commandPrefix = "新增"
-	case "del":
-		commandPrefix = "刪除"
-	}
-
-	var errMsgs myutil.StringSlice
-	if keywordStr != "" {
-		command = commandPrefix
-		_, err = handleKeyword(command, userID, boardStr, keywordStr)
-		if err != nil {
-			errMsgs.AppendNonRepeatElement(err.Error(), false)
-		}
-	}
-	if authorStr != "" {
-		command = commandPrefix + "作者"
-		_, err = handleAuthor(command, userID, boardStr, authorStr)
-		if err != nil {
-			errMsgs.AppendNonRepeatElement(err.Error(), false)
-		}
-	}
-	if push != "" {
-		if commandPrefix == "刪除" {
-			push = "0"
-		}
-		command = "新增推文數"
-		_, err = handlePushSum(command, userID, boardStr, push)
-		if err != nil {
-			errMsgs.AppendNonRepeatElement(err.Error(), false)
-		}
-	}
-	if boo != "" {
-		if commandPrefix == "刪除" {
-			boo = "0"
-		}
-		command = "新增噓文數"
-		_, err = handlePushSum(command, userID, boardStr, boo)
-		if err != nil {
-			errMsgs.AppendNonRepeatElement(err.Error(), false)
-		}
-	}
-	if len(errMsgs) != 0 {
-		return strings.Join([]string(errMsgs), "\n")
-	}
-	return commandPrefix + "成功。"
 }
 
 func handleDebug(account string) string {
@@ -357,20 +265,7 @@ func stringCommands() string {
 }
 
 func listTop() string {
-	content := "關鍵字"
-	for i, keyword := range top.ListKeywords(5) {
-		content += fmt.Sprintf("\n%d. %s", i+1, keyword)
-	}
-	content += "\n----\n作者"
-	for i, author := range top.ListAuthors(5) {
-		content += fmt.Sprintf("\n%d. %s", i+1, author)
-	}
-	content += "\n----\n推噓文"
-	for i, pushSum := range top.ListPushSum(5) {
-		content += fmt.Sprintf("\n%d. %s", i+1, pushSum)
-	}
-	content += "\n\nTOP 100:\nhttps://ptt.luan.com.tw/top"
-	return content
+	return top.ListTopFormatted(5)
 }
 
 func handleKeyword(command, chatID, boardStr, keywordStr string) (string, error) {

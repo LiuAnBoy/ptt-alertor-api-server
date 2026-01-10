@@ -4,11 +4,11 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/Ptt-Alertor/ptt-alertor/models/account"
+	"github.com/Ptt-Alertor/ptt-alertor/models/top"
 	"github.com/julienschmidt/httprouter"
 )
 
-var statsRepo = &account.SubscriptionStatsPostgres{}
+var statsRepo = &top.Postgres{}
 
 // ListSubscriptionStats returns subscription statistics
 func ListSubscriptionStats(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
@@ -35,7 +35,7 @@ func ListSubscriptionStats(w http.ResponseWriter, r *http.Request, _ httprouter.
 	// Parse board filter
 	board := r.URL.Query().Get("board")
 
-	var stats []*account.SubscriptionStat
+	var stats []*top.Stat
 	var err error
 
 	if board != "" {
@@ -50,7 +50,7 @@ func ListSubscriptionStats(w http.ResponseWriter, r *http.Request, _ httprouter.
 	}
 
 	if stats == nil {
-		stats = []*account.SubscriptionStat{}
+		stats = []*top.Stat{}
 	}
 
 	writeJSON(w, http.StatusOK, stats)

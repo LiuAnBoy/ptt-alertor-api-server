@@ -1,110 +1,57 @@
 package top
 
 import (
-	"strings"
-
-	"strconv"
-
-	log "github.com/Ptt-Alertor/logrus"
-	"github.com/Ptt-Alertor/ptt-alertor/connections"
-	"github.com/Ptt-Alertor/ptt-alertor/myutil"
-	"github.com/gomodule/redigo/redis"
+	"fmt"
 )
 
-const prefix string = "top:"
+var statsRepo = &Postgres{}
 
-type BoardWord struct {
-	Board, Word string
-}
-
-type WordOrder struct {
-	BoardWord
-	Count int
-}
-
-type WordOrders []WordOrder
-
-func (wos WordOrders) SaveKeywords() error {
-	return wos.save("keywords")
-}
-
-func (wos WordOrders) SaveAuthors() error {
-	return wos.save("authors")
-}
-
-func (wos WordOrders) SavePushSum() error {
-	return wos.save("pushsum")
-}
-
-func (wos WordOrders) save(kind string) error {
-	conn := connections.Redis()
-	defer conn.Close()
-	for _, wo := range wos {
-		if _, err := conn.Do("ZADD", prefix+kind, wo.Count, wo.String()); err != nil {
-			log.WithField("runtime", myutil.BasicRuntimeInfo()).WithError(err).Error()
-			return err
-		}
-	}
-	return nil
-}
-
-func ListAuthors(num int) []string {
-	return list("authors", num)
-}
-
+// ListKeywords returns top keywords as "board:keyword" strings
 func ListKeywords(num int) []string {
-	return list("keywords", num)
+	return listByType("keyword", num)
 }
 
+// ListAuthors returns top authors as "board:author" strings
+func ListAuthors(num int) []string {
+	return listByType("author", num)
+}
+
+// ListPushSum returns top pushsum as "board:value" strings
 func ListPushSum(num int) []string {
-	return list("pushsum", num)
+	return listByType("pushsum", num)
 }
 
-func list(kind string, num int) []string {
-	conn := connections.Redis()
-	defer conn.Close()
-	lists, err := redis.Strings(conn.Do("ZREVRANGE", prefix+kind, 0, num-1))
+// listByType fetches stats from PostgreSQL and formats as "board:value"
+func listByType(subType string, num int) []string {
+	stats, err := statsRepo.ListByType(subType, num)
 	if err != nil {
-		log.WithField("runtime", myutil.BasicRuntimeInfo()).WithError(err).Error()
+		return nil
 	}
-	return lists
-}
 
-func ListKeywordWithScore(num int) WordOrders {
-	return listWithScore("keywords", num)
-}
-
-func ListAuthorWithScore(num int) WordOrders {
-	return listWithScore("authors", num)
-}
-
-func ListPushSumWithScore(num int) WordOrders {
-	return listWithScore("pushsum", num)
-}
-
-func listWithScore(kind string, num int) (wos WordOrders) {
-	conn := connections.Redis()
-	defer conn.Close()
-	list, err := redis.Strings(conn.Do("ZREVRANGE", prefix+kind, 0, num-1, "WITHSCORES"))
-	if err != nil {
-		log.WithField("runtime", myutil.BasicRuntimeInfo()).WithError(err).Error()
+	result := make([]string, 0, len(stats))
+	for _, stat := range stats {
+		result = append(result, fmt.Sprintf("%s:%s", stat.Board, stat.Value))
 	}
-	bw := BoardWord{}
-	for index, element := range list {
-		if index%2 == 0 {
-			bw = BoardWord{}
-			strs := strings.Split(element, ":")
-			bw.Board = strs[0]
-			bw.Word = strs[1]
-			continue
-		}
-		count, _ := strconv.Atoi(element)
-		wo := WordOrder{bw, count}
-		wos = append(wos, wo)
-	}
-	return wos
+	return result
 }
 
-func (wo WordOrder) String() string {
-	return wo.Board + ":" + wo.Word
+// ListTopFormatted returns formatted top rankings for Telegram display
+func ListTopFormatted(num int) string {
+	content := "關鍵字"
+	for i, keyword := range ListKeywords(num) {
+		content += fmt.Sprintf("\n%d. %s", i+1, keyword)
+	}
+
+	content += "\n----\n作者"
+	for i, author := range ListAuthors(num) {
+		content += fmt.Sprintf("\n%d. %s", i+1, author)
+	}
+
+	content += "\n----\n推噓文"
+	for i, pushSum := range ListPushSum(num) {
+		content += fmt.Sprintf("\n%d. %s", i+1, pushSum)
+	}
+
+	content += "\n\nTOP 100:\nhttps://ptt.luan.com.tw/top"
+	return content
 }

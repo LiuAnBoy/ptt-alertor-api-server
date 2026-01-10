@@ -1,15 +1,14 @@
-package account
+package top
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/Ptt-Alertor/ptt-alertor/connections"
 )
 
-// SubscriptionStat represents a subscription statistic entry
-type SubscriptionStat struct {
+// Stat represents a subscription statistic entry
+type Stat struct {
 	ID        int       `json:"id"`
 	Board     string    `json:"board"`
 	SubType   string    `json:"sub_type"`
@@ -18,11 +17,11 @@ type SubscriptionStat struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// SubscriptionStatsPostgres is the PostgreSQL repository for subscription stats
-type SubscriptionStatsPostgres struct{}
+// Postgres is the PostgreSQL repository for subscription stats
+type Postgres struct{}
 
 // Increment increments the count for a board/sub_type/value combination
-func (p *SubscriptionStatsPostgres) Increment(board, subType, value string) error {
+func (p *Postgres) Increment(board, subType, value string) error {
 	ctx := context.Background()
 	pool := connections.Postgres()
 
@@ -37,7 +36,7 @@ func (p *SubscriptionStatsPostgres) Increment(board, subType, value string) erro
 }
 
 // Decrement decrements the count for a board/sub_type/value combination
-func (p *SubscriptionStatsPostgres) Decrement(board, subType, value string) error {
+func (p *Postgres) Decrement(board, subType, value string) error {
 	ctx := context.Background()
 	pool := connections.Postgres()
 
@@ -51,7 +50,7 @@ func (p *SubscriptionStatsPostgres) Decrement(board, subType, value string) erro
 }
 
 // IncrementBatch increments counts for multiple values
-func (p *SubscriptionStatsPostgres) IncrementBatch(board, subType string, values []string) error {
+func (p *Postgres) IncrementBatch(board, subType string, values []string) error {
 	for _, value := range values {
 		if err := p.Increment(board, subType, value); err != nil {
 			return err
@@ -61,7 +60,7 @@ func (p *SubscriptionStatsPostgres) IncrementBatch(board, subType string, values
 }
 
 // DecrementBatch decrements counts for multiple values
-func (p *SubscriptionStatsPostgres) DecrementBatch(board, subType string, values []string) error {
+func (p *Postgres) DecrementBatch(board, subType string, values []string) error {
 	for _, value := range values {
 		if err := p.Decrement(board, subType, value); err != nil {
 			return err
@@ -71,7 +70,7 @@ func (p *SubscriptionStatsPostgres) DecrementBatch(board, subType string, values
 }
 
 // ListByType returns all stats for a given sub_type, ordered by count desc
-func (p *SubscriptionStatsPostgres) ListByType(subType string, limit int) ([]*SubscriptionStat, error) {
+func (p *Postgres) ListByType(subType string, limit int) ([]*Stat, error) {
 	ctx := context.Background()
 	pool := connections.Postgres()
 
@@ -104,9 +103,9 @@ func (p *SubscriptionStatsPostgres) ListByType(subType string, limit int) ([]*Su
 	}
 	defer rows.Close()
 
-	var stats []*SubscriptionStat
+	var stats []*Stat
 	for rows.Next() {
-		var stat SubscriptionStat
+		var stat Stat
 		err := rows.Scan(
 			&stat.ID,
 			&stat.Board,
@@ -125,7 +124,7 @@ func (p *SubscriptionStatsPostgres) ListByType(subType string, limit int) ([]*Su
 }
 
 // ListByBoard returns all stats for a given board, ordered by count desc
-func (p *SubscriptionStatsPostgres) ListByBoard(board string, limit int) ([]*SubscriptionStat, error) {
+func (p *Postgres) ListByBoard(board string, limit int) ([]*Stat, error) {
 	ctx := context.Background()
 	pool := connections.Postgres()
 
@@ -158,9 +157,9 @@ func (p *SubscriptionStatsPostgres) ListByBoard(board string, limit int) ([]*Sub
 	}
 	defer rows.Close()
 
-	var stats []*SubscriptionStat
+	var stats []*Stat
 	for rows.Next() {
-		var stat SubscriptionStat
+		var stat Stat
 		err := rows.Scan(
 			&stat.ID,
 			&stat.Board,
@@ -176,41 +175,4 @@ func (p *SubscriptionStatsPostgres) ListByBoard(board string, limit int) ([]*Sub
 	}
 
 	return stats, nil
-}
-
-// ParseKeywordValues parses a keyword value and returns individual keywords
-func ParseKeywordValues(value string) []string {
-	// Skip exclude patterns
-	if strings.HasPrefix(value, "!") {
-		return nil
-	}
-
-	// Handle regexp patterns: regexp:A|B|C -> [A, B, C]
-	if pattern, found := strings.CutPrefix(value, "regexp:"); found {
-		parts := strings.Split(pattern, "|")
-		var result []string
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				result = append(result, part)
-			}
-		}
-		return result
-	}
-
-	// Handle AND patterns: A&B -> [A, B]
-	if strings.Contains(value, "&") {
-		parts := strings.Split(value, "&")
-		var result []string
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				result = append(result, part)
-			}
-		}
-		return result
-	}
-
-	// Simple keyword
-	return []string{value}
 }
