@@ -28,35 +28,67 @@ var inputErrorTips = []string{
 	"3. 板名欄位間不允許空白字元。",
 }
 
-// Commands is commands documents
-var Commands = map[string]map[string]string{
-	"一般": {
-		"指令": "可使用的指令清單",
-		"清單": "設定的看板、關鍵字、作者",
-		"排行": "前五名追蹤的關鍵字、作者",
+// CommandItem represents a command and its description
+type CommandItem struct {
+	Cmd string
+	Doc string
+}
+
+// CommandCategory represents a category of commands
+type CommandCategory struct {
+	Name  string
+	Items []CommandItem
+}
+
+// Commands is ordered commands documents
+var Commands = []CommandCategory{
+	{
+		Name: "一般",
+		Items: []CommandItem{
+			{"指令", "可使用的指令清單"},
+			{"清單", "設定的看板、關鍵字、作者"},
+			{"排行", "前五名追蹤的關鍵字、作者"},
+		},
 	},
-	"關鍵字相關": {
-		"新增 看板 關鍵字": "新增追蹤關鍵字",
-		"刪除 看板 關鍵字": "取消追蹤關鍵字",
-		"範例":        "新增 gossiping,movie 金城武,結衣",
+	{
+		Name: "關鍵字相關",
+		Items: []CommandItem{
+			{"新增 看板 關鍵字", "新增追蹤關鍵字"},
+			{"刪除 看板 關鍵字", "取消追蹤關鍵字"},
+			{"範例", "新增 gossiping,movie 金城武,結衣"},
+		},
 	},
-	"作者相關": {
-		"新增作者 看板 作者": "新增追蹤作者",
-		"刪除作者 看板 作者": "取消追蹤作者",
-		"範例":         "新增作者 gossiping ffaarr,obov",
+	{
+		Name: "作者相關",
+		Items: []CommandItem{
+			{"新增作者 看板 作者", "新增追蹤作者"},
+			{"刪除作者 看板 作者", "取消追蹤作者"},
+			{"範例", "新增作者 gossiping ffaarr,obov"},
+		},
 	},
-	"推噓文數相關": {
-		"新增(推/噓)文數 看板 總數": "通知推或噓文數",
-		"範例":              "新增推文數 joke,beauty 10",
-		"歸零即刪除":           "新增噓文數 joke 0",
+	{
+		Name: "推噓文數相關",
+		Items: []CommandItem{
+			{"新增(推/噓)文數 看板 總數", "通知推或噓文數"},
+			{"範例", "新增推文數 joke,beauty 10"},
+			{"歸零即刪除", "新增噓文數 joke 0"},
+		},
 	},
-	"推文相關": {
-		"新增推文 網址": "新增推文追蹤",
-		"刪除推文 網址": "刪除推文追蹤",
-		"範例":      "新增推文 https://www.ptt.cc/bbs/EZsoft/M.1497363598.A.74E.html",
+	{
+		Name: "推文相關",
+		Items: []CommandItem{
+			{"新增推文 網址", "新增推文追蹤"},
+			{"刪除推文 網址", "刪除推文追蹤"},
+			{"推文清單", "查看追蹤的文章"},
+			{"清理推文", "清理已失效的文章"},
+			{"範例", "新增推文 https://www.ptt.cc/bbs/EZsoft/M.1497363598.A.74E.html"},
+		},
 	},
-	"進階應用": {
-		"參考連結": "https://ptt.luan.com.tw/docs",
+	{
+		Name: "進階應用",
+		Items: []CommandItem{
+			{"參考連結", "https://ptt.luan.com.tw/docs"},
+		},
 	},
 }
 
@@ -250,12 +282,12 @@ func handleCommentList(chatID string) string {
 
 func stringCommands() string {
 	str := ""
-	for cat, cmds := range Commands {
-		str += "[" + cat + "]\n"
-		for cmd, doc := range cmds {
-			str += cmd
-			if doc != "" {
-				str += "：" + doc
+	for _, cat := range Commands {
+		str += "[" + cat.Name + "]\n"
+		for _, item := range cat.Items {
+			str += item.Cmd
+			if item.Doc != "" {
+				str += "：" + item.Doc
 			}
 			str += "\n"
 		}
